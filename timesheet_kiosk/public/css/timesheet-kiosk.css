@@ -41,7 +41,7 @@ h1, h2, h3, .display {
   gap: 10px;
   position: sticky; top: 0; z-index: 10;
 }
-.topbar .brand { display: flex; align-items: center; gap: 10px; }
+.topbar .brand { display: flex; align-items: center; gap: 10px; cursor: pointer; }
 .topbar .brand-logo { font-family: 'Space Grotesk'; font-weight: 700; font-size: 20px; color: var(--ink); }
 .topbar .brand-title { font-size: 13px; font-weight: 700; letter-spacing: 0.08em; color: var(--sub); }
 .topbar .user-pill {
@@ -138,7 +138,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ink); outli
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 
 /* ---------- Timer screen ---------- */
-.timer-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; }
+.timer-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; padding-top: calc(10px + var(--safe-top)); }
 .wih-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 22px; }
 .wih-card .lbl { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: var(--sub); }
 .wih-card .wih-name { font-family: 'Space Grotesk'; font-size: 24px; font-weight: 700; margin-top: 4px; }

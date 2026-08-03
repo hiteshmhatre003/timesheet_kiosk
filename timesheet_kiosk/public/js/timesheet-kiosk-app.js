@@ -175,7 +175,7 @@ function wireDashboardBody() {
 function topbar() {
   return `
     <div class="topbar">
-      <div class="brand">
+      <div class="brand" id="brandHome">
         <span class="brand-logo">amal</span>
         <span class="brand-title">TIMESHEET</span>
       </div>
@@ -190,6 +190,9 @@ function topbar() {
 function wireTopbar() {
   const btn = document.getElementById("logoutBtn");
   if (btn) btn.onclick = async () => { await API.logout(); navigate("#/login"); };
+
+  const brand = document.getElementById("brandHome");
+  if (brand) brand.onclick = () => navigate("#/dashboard");
 }
 
 function fab() {
