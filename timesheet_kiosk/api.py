@@ -102,6 +102,26 @@ def healthz():
 # ---------------------------------------------------------------------------
 
 @frappe.whitelist(allow_guest=True)
+def reset_session():
+    """Called (as a GET request) right before login(). GET requests are
+    never CSRF-checked by Frappe, so this can safely clear out any
+    pre-existing session cookie in the browser — e.g. an ERPNext Desk
+    session left over from logging in elsewhere on the same device/
+    browser, or a previous kiosk user's session on a shared tablet.
+
+    Without this, login() (a POST request) can get rejected with
+    "Invalid Request" (CSRFTokenError) whenever the browser still holds
+    a valid sid cookie for a *different* authenticated session — the
+    login POST looks, to Frappe, like an attempted request against that
+    other session rather than a fresh Guest login.
+    """
+    if frappe.session.user != "Guest":
+        frappe.local.login_manager.logout()
+        frappe.db.commit()
+    return {"ok": True}
+
+
+@frappe.whitelist(allow_guest=True)
 def login(usr=None, pwd=None, username=None, password=None):
     """Equivalent of POST /auth/login. No Employee lookup required."""
     usr = usr or username
