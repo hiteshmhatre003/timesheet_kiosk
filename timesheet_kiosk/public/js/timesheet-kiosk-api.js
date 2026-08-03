@@ -24,33 +24,50 @@ async function callMethod(method, args = {}) {
     body: JSON.stringify(args),
   });
 
-  if (res.status === 403) {
-    Store.clear();
-    throw new Error("Session expired. Please sign in again.");
-  }
-
   const data = await res.json().catch(() => ({}));
+
   if (!res.ok) {
-    const msg = (data && (data._server_messages || data.exc || data.message)) || `Request failed (${res.status})`;
-    throw new Error(typeof msg === "string" ? stripServerMessage(msg) : "Something went wrong");
+    const msg = extractMessage(data) || `Request failed (${res.status})`;
+    // Only a genuinely stale/invalid session should bounce the user back
+    // to the login screen. Other errors (e.g. missing doctype permission,
+    // which Frappe also returns as HTTP 403) should surface as-is —
+    // clearing the session for those just hides the real problem behind
+    // a misleading message and forces a pointless re-login loop.
+    if (res.status === 401 || /invalid request|csrf/i.test(msg)) {
+      Store.clear();
+      throw new Error("Session expired. Please sign in again.");
+    }
+    throw new Error(msg);
   }
   return data.message;
 }
 
-function stripServerMessage(msg) {
-  // frappe.throw() messages sometimes arrive as a JSON-encoded array string
-  try {
-    const parsed = JSON.parse(msg);
-    if (Array.isArray(parsed) && parsed[0]) {
-      const inner = JSON.parse(parsed[0]);
-      return inner.message || msg;
-    }
-  } catch (e) { /* not JSON, use as-is */ }
-  return msg;
+function extractMessage(data) {
+  if (!data) return null;
+  if (data._server_messages) {
+    try {
+      const arr = JSON.parse(data._server_messages);
+      const msgs = arr
+        .map((m) => { try { return JSON.parse(m).message; } catch (e) { return m; } })
+        .filter(Boolean);
+      if (msgs.length) return msgs.join(" ");
+    } catch (e) { /* fall through */ }
+  }
+  if (typeof data.message === "string") return data.message;
+  if (data.exception) {
+    const parts = String(data.exception).split(":");
+    return parts.length > 1 ? parts.slice(1).join(":").trim() : String(data.exception);
+  }
+  return null;
 }
 
 const API = {
   async login(usr, pwd) {
+    // Clear out any pre-existing session cookie first (see reset_session's
+    // docstring in api.py) — a GET request, so it's never CSRF-checked,
+    // unlike the login POST that follows.
+    await fetch("/api/method/timesheet_kiosk.api.reset_session", { credentials: "include" }).catch(() => {});
+
     const res = await callMethod("login", { usr, pwd });
     Store.user = res.userId;
     Store.csrf = res.csrf_token;
