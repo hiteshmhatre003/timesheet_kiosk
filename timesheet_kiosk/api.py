@@ -71,9 +71,18 @@ def _build_timesheet_response(doc):
             "is_running": bool(e.get("is_running")),
         })
 
+    # This is a single lookup on the already-detail view (get_timesheet),
+    # not the paginated list, so it's not a cost that scales with the
+    # number of timesheets — worth calling out since that's exactly the
+    # kind of thing that was slow before the list/stats rewrite.
+    wih_photo = None
+    if doc.get("wih_number"):
+        wih_photo = frappe.db.get_value("Work In Hand", doc.wih_number, "photos")
+
     return {
         "name": doc.name,
         "wih_number": doc.get("wih_number"),
+        "wih_photo": wih_photo,
         "employee": doc.user or "",
         "employee_name": doc.user,
         "product_name": doc.get("product_name"),

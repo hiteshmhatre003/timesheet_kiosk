@@ -392,10 +392,13 @@ async function loadTimerScreen(name) {
       </div>
 
       <div class="wih-card">
-        <div>
-          <div class="lbl">WORK IN HAND (WIH)</div>
-          <div class="wih-name">${doc.wih_number}</div>
-          <div class="style">${doc.product_name || ""}</div>
+        <div class="wih-info-row">
+          ${doc.wih_photo ? `<img src="${doc.wih_photo}" class="wih-thumb" id="wihThumb" alt="WIH photo" />` : ""}
+          <div>
+            <div class="lbl">WORK IN HAND (WIH)</div>
+            <div class="wih-name">${doc.wih_number}</div>
+            <div class="style">${doc.product_name || ""}</div>
+          </div>
         </div>
         <div>
           <div class="hours-lbl">TOTAL ACCUMULATED HOURS</div>
@@ -454,6 +457,9 @@ async function loadTimerScreen(name) {
   `;
 
   document.getElementById("backBtn").onclick = () => navigate("#/dashboard");
+
+  const wihThumb = document.getElementById("wihThumb");
+  if (wihThumb) wihThumb.onclick = () => showImageModal(doc.wih_photo);
 
   if (isDraft) {
     document.getElementById("timerBtn").onclick = async () => {
@@ -589,6 +595,22 @@ function fmtTime(dt) {
   const d = new Date(dt.replace(" ", "T"));
   if (isNaN(d)) return dt;
   return d.toTimeString().slice(0, 5);
+}
+
+function showImageModal(url) {
+  if (!url) return;
+  const wrap = document.createElement("div");
+  wrap.className = "modal-backdrop";
+  wrap.innerHTML = `
+    <div class="image-modal">
+      <button class="image-modal-close" id="imgModalClose" aria-label="Close">&times;</button>
+      <img src="${url}" alt="WIH photo" />
+    </div>
+  `;
+  // Tap the dark backdrop (not the image itself) to close.
+  wrap.onclick = (e) => { if (e.target === wrap) wrap.remove(); };
+  document.body.appendChild(wrap);
+  document.getElementById("imgModalClose").onclick = () => wrap.remove();
 }
 
 function showSubmitModal(name) {
