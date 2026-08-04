@@ -285,6 +285,16 @@ async function renderTimer(name) {
 }
 
 async function loadTimerScreen(name) {
+  // loadTimerScreen is called directly from several button handlers below
+  // (start/stop, add manual entry, delete entry) as well as through
+  // render(). render() clears timerInterval before calling this, but those
+  // direct calls didn't — so every action taken while a timer was running
+  // stacked another 1-second ticker on top of the previous one, and they
+  // all fought over the same number. Clearing here, unconditionally,
+  // guarantees at most one ticker is ever alive no matter which path
+  // brought us here.
+  clearInterval(timerInterval);
+
   let doc;
   try {
     doc = await API.getTimesheet(name);
