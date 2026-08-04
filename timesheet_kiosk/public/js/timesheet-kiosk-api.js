@@ -83,7 +83,7 @@ const API = {
 
   listWih(search) { return callMethod("list_wih", { search }); },
   getStats() { return callMethod("get_timesheet_stats"); },
-  listTimesheets(status) { return callMethod("list_timesheets", { status }); },
+  listTimesheets(status, wih_number, page) { return callMethod("list_timesheets", { status, wih_number, page }); },
   createTimesheet(wih_number, start_date, product_name) {
     return callMethod("create_timesheet", { wih_number, start_date, product_name });
   },

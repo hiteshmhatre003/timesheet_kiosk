@@ -108,40 +108,89 @@ function renderLogin() {
 // DASHBOARD
 // ------------------------------------------------------------------
 let currentFilter = "All";
+let dashboardPage = 1;
+let dashboardWihSearch = "";
+let searchDebounce = null;
 
 async function renderDashboard() {
-  app.innerHTML = topbar() + `<div class="screen" id="dashScreen"><div class="loading-center">Loading…</div></div>` + fab();
+  app.innerHTML = topbar() + `
+    <div class="screen" id="dashScreen">
+      <div id="statsArea" class="stat-grid">
+        <div class="stat-card"><div class="label">HOURS TODAY</div><div class="value">&hellip;</div></div>
+        <div class="stat-card"><div class="label">HOURS WEEK</div><div class="value">&hellip;</div></div>
+        <div class="stat-card"><div class="label">ACTIVE SHEETS</div><div class="value">&hellip;</div></div>
+        <div class="stat-card"><div class="label">STATUS</div><div class="value">&hellip;</div></div>
+      </div>
+
+      <div class="section-head"><h2>My Timesheets</h2></div>
+      <div class="tabs">
+        ${["All", "Draft", "Submitted"].map(f => `<div class="tab ${f === currentFilter ? "active" : ""}" data-filter="${f}">${f.toUpperCase()}</div>`).join("")}
+      </div>
+      <div class="field">
+        <input id="wihSearchInput" type="text" placeholder="Search by WIH number…" value="${dashboardWihSearch}" />
+      </div>
+      <div id="sheetListArea"><div class="loading-center">Loading…</div></div>
+    </div>
+  ` + fab();
+
   wireTopbar();
   wireFab();
+  wireDashboardControls();
+  loadStats();
+  loadSheetList();
+}
 
+async function loadStats() {
   try {
-    const [stats, sheets] = await Promise.all([
-      API.getStats(),
-      API.listTimesheets(currentFilter === "All" ? undefined : currentFilter),
-    ]);
-    document.getElementById("dashScreen").innerHTML = dashboardBody(stats, sheets);
-    wireDashboardBody();
+    const stats = await API.getStats();
+    const el = document.getElementById("statsArea");
+    if (el) el.innerHTML = statCardsHtml(stats);
   } catch (e) {
-    document.getElementById("dashScreen").innerHTML = `<div class="error-box">${e.message}</div>`;
+    // non-fatal — the timesheet list below still loads independently
   }
 }
 
-function dashboardBody(stats, sheets) {
+function statCardsHtml(stats) {
   return `
-    <div class="stat-grid">
-      <div class="stat-card"><div class="label">HOURS TODAY</div><div class="value">${flt2(stats.total_hours_today)}</div></div>
-      <div class="stat-card"><div class="label">HOURS WEEK</div><div class="value">${flt2(stats.total_hours_week)}</div></div>
-      <div class="stat-card"><div class="label">ACTIVE SHEETS</div><div class="value">${stats.active_timesheets}</div></div>
-      <div class="stat-card"><div class="label">${stats.has_active_timer ? "TIMER RUNNING" : "ALL TIMERS STOPPED"}</div><div class="value">${stats.has_active_timer ? "&#9654;" : "&#9632;"}</div></div>
-    </div>
+    <div class="stat-card"><div class="label">HOURS TODAY</div><div class="value">${flt2(stats.total_hours_today)}</div></div>
+    <div class="stat-card"><div class="label">HOURS WEEK</div><div class="value">${flt2(stats.total_hours_week)}</div></div>
+    <div class="stat-card"><div class="label">ACTIVE SHEETS</div><div class="value">${stats.active_timesheets}</div></div>
+    <div class="stat-card"><div class="label">${stats.has_active_timer ? "TIMER RUNNING" : "ALL TIMERS STOPPED"}</div><div class="value">${stats.has_active_timer ? "&#9654;" : "&#9632;"}</div></div>
+  `;
+}
 
-    <div class="section-head"><h2>My Timesheets</h2></div>
-    <div class="tabs">
-      ${["All", "Draft", "Submitted"].map(f => `<div class="tab ${f === currentFilter ? "active" : ""}" data-filter="${f}">${f.toUpperCase()}</div>`).join("")}
-    </div>
+async function loadSheetList() {
+  const area = document.getElementById("sheetListArea");
+  if (area) area.innerHTML = `<div class="loading-center">Loading…</div>`;
+  try {
+    const resp = await API.listTimesheets(
+      currentFilter === "All" ? undefined : currentFilter,
+      dashboardWihSearch || undefined,
+      dashboardPage
+    );
+    if (area) {
+      area.innerHTML = sheetListHtml(resp);
+      wireSheetList(resp);
+    }
+  } catch (e) {
+    if (area) area.innerHTML = `<div class="error-box">${e.message}</div>`;
+  }
+}
+
+function sheetListHtml(resp) {
+  const sheets = resp.items || [];
+  const totalPages = Math.max(1, Math.ceil((resp.total || 0) / (resp.page_size || 10)));
+  return `
     <div id="sheetList">
-      ${sheets.length ? sheets.map(sheetCard).join("") : `<div class="empty-state">No timesheets yet. Tap "New Timesheet" to start.</div>`}
+      ${sheets.length ? sheets.map(sheetCard).join("") : `<div class="empty-state">No timesheets found.</div>`}
     </div>
+    ${resp.total > resp.page_size ? `
+      <div class="pagination">
+        <button class="btn btn-outline pagination-btn" id="dashPrevBtn" ${resp.page <= 1 ? "disabled" : ""}>&larr; Prev</button>
+        <span class="page-indicator">Page ${resp.page} of ${totalPages}</span>
+        <button class="btn btn-outline pagination-btn" id="dashNextBtn" ${resp.page >= totalPages ? "disabled" : ""}>Next &rarr;</button>
+      </div>
+    ` : ""}
   `;
 }
 
@@ -163,13 +212,37 @@ function sheetCard(s) {
 
 function flt2(v) { return (v || 0).toFixed(2); }
 
-function wireDashboardBody() {
+function wireDashboardControls() {
   document.querySelectorAll(".tab").forEach(tab => {
-    tab.onclick = () => { currentFilter = tab.dataset.filter; renderDashboard(); };
+    tab.onclick = () => {
+      currentFilter = tab.dataset.filter;
+      dashboardPage = 1;
+      document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t === tab));
+      loadSheetList();
+    };
   });
+
+  const searchInput = document.getElementById("wihSearchInput");
+  if (searchInput) {
+    searchInput.addEventListener("input", () => {
+      clearTimeout(searchDebounce);
+      searchDebounce = setTimeout(() => {
+        dashboardWihSearch = searchInput.value.trim();
+        dashboardPage = 1;
+        loadSheetList();
+      }, 350);
+    });
+  }
+}
+
+function wireSheetList(resp) {
   document.querySelectorAll(".sheet-card").forEach(card => {
     card.onclick = () => navigate(`#/timer/${card.dataset.name}`);
   });
+  const prevBtn = document.getElementById("dashPrevBtn");
+  if (prevBtn) prevBtn.onclick = () => { dashboardPage = Math.max(1, dashboardPage - 1); loadSheetList(); };
+  const nextBtn = document.getElementById("dashNextBtn");
+  if (nextBtn) nextBtn.onclick = () => { dashboardPage += 1; loadSheetList(); };
 }
 
 function topbar() {
@@ -284,6 +357,9 @@ async function renderTimer(name) {
   await loadTimerScreen(name);
 }
 
+let entriesPage = 1;
+const ENTRIES_PAGE_SIZE = 6;
+
 async function loadTimerScreen(name) {
   // loadTimerScreen is called directly from several button handlers below
   // (start/stop, add manual entry, delete entry) as well as through
@@ -294,6 +370,7 @@ async function loadTimerScreen(name) {
   // guarantees at most one ticker is ever alive no matter which path
   // brought us here.
   clearInterval(timerInterval);
+  entriesPage = 1; // always land on the newest entries when a timesheet is (re)loaded
 
   let doc;
   try {
@@ -303,6 +380,7 @@ async function loadTimerScreen(name) {
     return;
   }
 
+  const sortedEntries = [...doc.timesheet_entry].sort((a, b) => b.idx - a.idx);
   const runningRow = doc.timesheet_entry.find(e => e.is_running);
   const isDraft = doc.status === "Draft" && doc.docstatus !== 1;
 
@@ -335,8 +413,9 @@ async function loadTimerScreen(name) {
         <div class="entries-head">Time Entries</div>
         <div class="entries-cols"><div>DATE</div><div>START</div><div>END</div><div>HOURS</div><div>MIN</div><div></div></div>
         <div id="entryRows">
-          ${doc.timesheet_entry.length ? doc.timesheet_entry.map(entryRow(isDraft)).join("") : `<div class="empty-state">No entries yet</div>`}
+          ${renderEntryRows(sortedEntries, isDraft)}
         </div>
+        <div id="entriesPagination">${renderEntriesPagination(sortedEntries.length)}</div>
       </div>
 
       ${isDraft ? `
@@ -421,16 +500,13 @@ async function loadTimerScreen(name) {
         errBox.innerHTML = `<div class="error-box">${e.message}</div>`;
       }
     };
-
-    document.querySelectorAll(".del-entry").forEach(btn => {
-      btn.onclick = async () => {
-        try {
-          await API.deleteEntry(name, btn.dataset.idx);
-          await loadTimerScreen(name);
-        } catch (e) { toast(e.message); }
-      };
-    });
   }
+
+  // Wired unconditionally (not just for Draft sheets) so Prev/Next still
+  // works when browsing entries on an already-submitted, read-only
+  // timesheet. The delete buttons themselves only exist in the DOM when
+  // isDraft was true, so this is a no-op for them on submitted sheets.
+  wireEntries(name, sortedEntries, isDraft);
 
   // live-tick the running timer's hours display
   if (runningRow) {
@@ -442,6 +518,57 @@ async function loadTimerScreen(name) {
       if (el) el.textContent = (parseFloat(baseHours) + hrs).toFixed(2);
     }, 1000);
   }
+}
+
+function renderEntryRows(sortedEntries, isDraft) {
+  const start = (entriesPage - 1) * ENTRIES_PAGE_SIZE;
+  const pageItems = sortedEntries.slice(start, start + ENTRIES_PAGE_SIZE);
+  if (!pageItems.length) return `<div class="empty-state">No entries yet</div>`;
+  return pageItems.map(entryRow(isDraft)).join("");
+}
+
+function renderEntriesPagination(totalCount) {
+  if (totalCount <= ENTRIES_PAGE_SIZE) return "";
+  const totalPages = Math.max(1, Math.ceil(totalCount / ENTRIES_PAGE_SIZE));
+  return `
+    <div class="pagination">
+      <button class="btn btn-outline pagination-btn" id="entriesPrevBtn" ${entriesPage <= 1 ? "disabled" : ""}>&larr; Prev</button>
+      <span class="page-indicator">Page ${entriesPage} of ${totalPages}</span>
+      <button class="btn btn-outline pagination-btn" id="entriesNextBtn" ${entriesPage >= totalPages ? "disabled" : ""}>Next &rarr;</button>
+    </div>
+  `;
+}
+
+// Entries are already fully loaded in memory (one get_timesheet call), so
+// paging through them is purely a local re-render — no extra API calls.
+function wireEntries(name, sortedEntries, isDraft) {
+  document.querySelectorAll(".del-entry").forEach(btn => {
+    btn.onclick = async () => {
+      try {
+        await API.deleteEntry(name, btn.dataset.idx);
+        await loadTimerScreen(name);
+      } catch (e) { toast(e.message); }
+    };
+  });
+
+  const prevBtn = document.getElementById("entriesPrevBtn");
+  if (prevBtn) prevBtn.onclick = () => {
+    entriesPage = Math.max(1, entriesPage - 1);
+    refreshEntriesDom(name, sortedEntries, isDraft);
+  };
+  const nextBtn = document.getElementById("entriesNextBtn");
+  if (nextBtn) nextBtn.onclick = () => {
+    entriesPage += 1;
+    refreshEntriesDom(name, sortedEntries, isDraft);
+  };
+}
+
+function refreshEntriesDom(name, sortedEntries, isDraft) {
+  const rowsEl = document.getElementById("entryRows");
+  const pagEl = document.getElementById("entriesPagination");
+  if (rowsEl) rowsEl.innerHTML = renderEntryRows(sortedEntries, isDraft);
+  if (pagEl) pagEl.innerHTML = renderEntriesPagination(sortedEntries.length);
+  wireEntries(name, sortedEntries, isDraft);
 }
 
 function entryRow(editable) {

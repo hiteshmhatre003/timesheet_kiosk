@@ -120,6 +120,11 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ink); outli
 .status-submitted, .status-locked { background: #f1f2f4; color: var(--sub); }
 .empty-state { text-align: center; padding: 40px 10px; color: var(--sub); font-size: 13px; }
 
+.pagination { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
+.pagination-btn { width: auto; padding: 10px 16px; font-size: 12px; flex: 0 0 auto; }
+.pagination-btn:disabled { opacity: 0.4; cursor: default; }
+.page-indicator { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; color: var(--sub); }
+
 .fab {
   position: fixed; right: 20px; bottom: calc(20px + var(--safe-bottom));
   background: var(--ink); color: #fff; border: none; border-radius: 30px;

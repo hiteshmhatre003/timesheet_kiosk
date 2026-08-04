@@ -230,6 +230,12 @@ def list_wih(search=None):
 
 @frappe.whitelist()
 def list_timesheets(status=None, wih_number=None, page=1):
+    """Returns {items, total, page, page_size} — a single lightweight query
+    instead of loading a full document (with its child table) per row. The
+    list view never needs entry-level detail, only these summary fields, so
+    there's no reason to pay for it here; get_timesheet(name) loads the
+    full document when a specific sheet is actually opened.
+    """
     user = _current_user()
     page = max(1, int(page or 1))
     start = (page - 1) * PAGE_SIZE
@@ -240,17 +246,25 @@ def list_timesheets(status=None, wih_number=None, page=1):
     elif status == "Submitted":
         filters["docstatus"] = 1
     if wih_number:
-        filters["wih_number"] = wih_number
+        # Substring search, not exact match, so users can type a partial
+        # WIH number and find it.
+        filters["wih_number"] = ["like", f"%{wih_number}%"]
 
-    names = frappe.get_all(
+    total = frappe.db.count(TS_DOCTYPE, filters=filters)
+
+    items = frappe.get_all(
         TS_DOCTYPE,
         filters=filters,
-        pluck="name",
+        fields=[
+            "name", "wih_number", "product_name", "start_date", "end_date",
+            "status", "docstatus", "total_hours", "notes",
+        ],
         order_by="modified desc",
         limit_page_length=PAGE_SIZE,
         limit_start=start,
     )
-    return [_build_timesheet_response(frappe.get_doc(TS_DOCTYPE, n)) for n in names]
+
+    return {"items": items, "total": total, "page": page, "page_size": PAGE_SIZE}
 
 
 @frappe.whitelist()
@@ -451,44 +465,51 @@ def delete_entry(name, idx):
 
 @frappe.whitelist()
 def get_timesheet_stats():
+    """Was previously loading up to 20 full Employee Timesheet documents
+    (each pulling its entire Timesheet Entry child table) on every single
+    dashboard visit — the most expensive call in the app, and one every
+    user hits every time they land on the dashboard. Replaced with two
+    aggregate SQL queries that return the exact same numbers regardless of
+    how many timesheets a user has (the old version was also silently
+    wrong for anyone with more than 20 timesheets, since it only looked at
+    the most recent 20).
+    """
     user = _current_user()
-    names = frappe.get_all(TS_DOCTYPE, filters={"user": user}, pluck="name", limit_page_length=500)
-
-    total_timesheets = len(names)
-    active_timesheets = 0
-    submitted_timesheets = 0
-    total_hours_today = 0.0
-    total_hours_week = 0.0
-    has_active_timer = False
-
     today_str = today()
     week_ago_str = add_days(today_str, -7)
 
-    # Matches the original perf trade-off: full detail (with child entries)
-    # is only pulled for the most recent 20 timesheets.
-    for n in names[:20]:
-        doc = frappe.get_doc(TS_DOCTYPE, n)
+    counts = frappe.db.sql(
+        """
+        select
+            count(*) as total,
+            sum(case when docstatus = 0 then 1 else 0 end) as active,
+            sum(case when docstatus = 1 then 1 else 0 end) as submitted
+        from `tabEmployee Timesheet`
+        where user = %s
+        """,
+        (user,),
+        as_dict=True,
+    )[0]
 
-        if doc.status == "Draft" and doc.docstatus != 1:
-            active_timesheets += 1
-        if doc.status == "Submitted" or doc.docstatus == 1:
-            submitted_timesheets += 1
-
-        for e in doc.timesheet_entry:
-            if e.get("is_running"):
-                has_active_timer = True
-                continue
-            hrs = e.duration_hours or 0
-            if str(e.entry_date) == str(today_str):
-                total_hours_today += hrs
-            if e.entry_date and str(e.entry_date) >= str(week_ago_str):
-                total_hours_week += hrs
+    hours = frappe.db.sql(
+        """
+        select
+            coalesce(sum(case when te.entry_date = %s and te.is_running = 0 then te.duration_hours else 0 end), 0) as today_hours,
+            coalesce(sum(case when te.entry_date >= %s and te.is_running = 0 then te.duration_hours else 0 end), 0) as week_hours,
+            sum(case when te.is_running = 1 then 1 else 0 end) as running_count
+        from `tabTimesheet Entry` te
+        inner join `tabEmployee Timesheet` ts on ts.name = te.parent
+        where ts.user = %s and te.parenttype = 'Employee Timesheet'
+        """,
+        (today_str, week_ago_str, user),
+        as_dict=True,
+    )[0]
 
     return {
-        "total_timesheets": total_timesheets,
-        "active_timesheets": active_timesheets,
-        "submitted_timesheets": submitted_timesheets,
-        "total_hours_today": round(total_hours_today, 2),
-        "total_hours_week": round(total_hours_week, 2),
-        "has_active_timer": has_active_timer,
+        "total_timesheets": int(counts.total or 0),
+        "active_timesheets": int(counts.active or 0),
+        "submitted_timesheets": int(counts.submitted or 0),
+        "total_hours_today": round(flt(hours.today_hours), 2),
+        "total_hours_week": round(flt(hours.week_hours), 2),
+        "has_active_timer": bool(hours.running_count),
     }
