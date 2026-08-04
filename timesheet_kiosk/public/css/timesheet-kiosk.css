@@ -137,6 +137,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ink); outli
 .form-card-body { padding: 20px; }
 .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 
+/* Native date/time inputs have their own minimum intrinsic width on phones
+   (especially iOS Safari) that doesn't reliably shrink to fit a half-width
+   grid column, causing them to overlap the next field. Stack to a single
+   column below ~420px so every field gets the full row. */
+@media (max-width: 420px) {
+  .two-col { grid-template-columns: 1fr; }
+}
+
 /* ---------- Timer screen ---------- */
 .timer-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; padding-top: calc(10px + var(--safe-top)); }
 .wih-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 22px; }
