@@ -132,7 +132,7 @@ function dashboardBody(stats, sheets) {
       <div class="stat-card"><div class="label">HOURS TODAY</div><div class="value">${flt2(stats.total_hours_today)}</div></div>
       <div class="stat-card"><div class="label">HOURS WEEK</div><div class="value">${flt2(stats.total_hours_week)}</div></div>
       <div class="stat-card"><div class="label">ACTIVE SHEETS</div><div class="value">${stats.active_timesheets}</div></div>
-      <div class="stat-card"><div class="label">${stats.has_active_timer ? "TIMER RUNNING" : "ALL TIMERS STOPPED"}</div><div class="value" style="color:${stats.has_active_timer ? "var(--danger)" : "var(--accent-green)"};">${stats.has_active_timer ? "&#9632;" : "&#9654;"}</div></div>
+      <div class="stat-card"><div class="label">${stats.has_active_timer ? "TIMER RUNNING" : "ALL TIMERS STOPPED"}</div><div class="value">${stats.has_active_timer ? "&#9654;" : "&#9632;"}</div></div>
     </div>
 
     <div class="section-head"><h2>My Timesheets</h2></div>
