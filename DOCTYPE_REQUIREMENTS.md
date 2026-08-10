@@ -37,24 +37,22 @@ place unused, or remove it — the API no longer reads or writes it.
 | `minutes`           | Float    | **Field name is `minutes`, not `duration_minutes`** — confirmed against the live doctype. `api.py` writes to this exact fieldname. |
 | `notes`             | Text     |                                                                |
 | `is_running`        | Check    | `1` while a timer is actively running on this row, `0` once stopped. This is how the app knows whether a timesheet has an active timer — not by checking whether `end_time` is blank. |
+| `user`              | Link (User) | **New in v4.** Records who personally punched this specific row. Now that one Employee Timesheet can be shared by several users allocated to the same WIH, this is how the app knows whose entry is whose — each user only sees, edits, and deletes rows where this matches them. Rows with this blank (punched before the field existed) are shown/editable to everyone rather than nobody. |
 
-## 3. Timesheet Allocation (new parent doctype)
+## 3. Timesheet Allocation (parent doctype)
 
-This doctype doesn't appear to exist yet in earlier conversations — it's
-new in this version of the app. A supervisor/admin creates one of these
-per user to control which WIH numbers that user is allowed to log time
-against.
+**Changed in v4.** Used to be one record per user (with a child table of
+WIH numbers). It's now the other way around: one record per WIH, shared by
+however many users are listed on it. A supervisor/admin creates one of
+these per WIH to control which users are allowed to log time against it.
 
-| Field name | Type        | Notes                                    |
-|-------------|-------------|-------------------------------------------|
-| `user`      | Link (User) | Mandatory                                 |
-| `wih`       | Table       | Child table → **Timesheet Allocation WIH** (see below) — **field name must literally be `wih`**, the API reads this exact fieldname. |
+| Field name | Type                | Notes                                    |
+|-------------|---------------------|-------------------------------------------|
+| `wih`       | Link (Work In Hand) | Mandatory — **field name must literally be `wih`**, the API reads this exact fieldname. |
+| `user`      | Table MultiSelect   | Mandatory — **field name must literally be `user`**. Backed by a child doctype (e.g. "User Multiselect") containing a single Link field to User. The API resolves that child doctype and its link fieldname from DocType metadata at runtime rather than hardcoding a guess, so the child doctype's own field can be named anything. |
 
-## 4. Timesheet Allocation WIH (new child table)
-
-| Field name | Type                  | Notes                                    |
-|-------------|------------------------|---------------------------------------------|
-| `wih`       | Link (Work In Hand)   | Mandatory — **field name must literally be `wih`**. |
+There is no longer a separate "Timesheet Allocation WIH" child doctype —
+`wih` is now a direct Link field on Timesheet Allocation itself.
 
 ---
 
