@@ -138,6 +138,7 @@ def _entry_user_field_exists():
 
 
 
+def _check_access(doc, user=None):
     """Replaces the old single-owner `_check_owner` check. Access to a
     (now potentially shared) Employee Timesheet is granted if the user:
       - created it, OR
