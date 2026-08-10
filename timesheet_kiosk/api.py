@@ -105,7 +105,39 @@ def _allocated_wih_numbers(user):
     return [w for w in wih_numbers if w]
 
 
-def _check_access(doc, user=None):
+def _is_mine(entry, user):
+    """True if `entry` (a Timesheet Entry row) belongs to `user` — or has no
+    owner recorded at all. Rows punched before the `user` field existed (or
+    while it wasn't actually saving — see _entry_user_field_exists below)
+    have a blank `user`, and are treated as everyone's/no-one's rather than
+    permanently un-ownable. Used everywhere an entry needs to be matched
+    against "the current user's own row": start_timer's duplicate check,
+    stop_timer's active-entry lookup, update_entry/delete_entry's
+    ownership check, and _build_timesheet_response's per-viewer filtering.
+    """
+    owner = entry.get("user")
+    return not owner or owner == user
+
+
+def _entry_user_field_exists():
+    """Whether Timesheet Entry currently has a `user` field at all, per the
+    live DocType metadata. get_timesheet_stats queries `te.user` directly
+    in raw SQL (unlike the doc-object `.get("user")` calls used elsewhere,
+    which just return None for a missing field rather than erroring) — a
+    genuinely missing column there is a hard SQL error, not a silent drop,
+    and would otherwise crash the whole dashboard stats card.
+
+    Deliberately NOT cached in a module-level variable here: frappe.get_meta()
+    already caches DocType metadata and correctly invalidates that cache the
+    moment the doctype is edited from the Desk UI. A second cache on top of
+    that would keep answering "no" even after the field gets added, until
+    the next worker restart — worse than just calling the (already cheap,
+    already cached) framework function directly each time.
+    """
+    return bool(frappe.get_meta("Timesheet Entry").has_field("user"))
+
+
+
     """Replaces the old single-owner `_check_owner` check. Access to a
     (now potentially shared) Employee Timesheet is granted if the user:
       - created it, OR
@@ -119,6 +151,10 @@ def _check_access(doc, user=None):
         return
     if doc.get("wih_number") and doc.wih_number in _allocated_wih_numbers(user):
         return
+    # Deliberately strict (not _is_mine's lenient blank-owner match) — this
+    # is a security-relevant fallback grant, so it should require genuine
+    # proof this user personally punched something here, not just "some
+    # row happens to have no owner recorded."
     if any(e.get("user") == user for e in (doc.get("timesheet_entry") or [])):
         return
     frappe.throw("You are not permitted to access this timesheet.", frappe.PermissionError)
@@ -138,7 +174,7 @@ def _build_timesheet_response(doc, user=None):
     # not their teammates'. Legacy rows punched before the `user` field
     # existed have no owner recorded, so they're shown to everyone rather
     # than hidden from everyone (fails open, not closed).
-    my_entries = [e for e in entries if not e.get("user") or e.get("user") == user]
+    my_entries = [e for e in entries if _is_mine(e, user)]
 
     # is_running is the source of truth; fall back to the old heuristic
     # (start_time set, end_time blank) in case of pre-fix legacy rows.
@@ -471,7 +507,10 @@ def start_timer(name, notes=None):
 
     # Scoped to THIS user's own entries — several teammates can each have
     # an independent timer running on the same shared timesheet at once.
-    if any(e.get("is_running") and e.get("user") == user for e in doc.timesheet_entry):
+    # Uses the same lenient _is_mine match as everywhere else (not a strict
+    # e.get("user") == user), so this still works correctly even for a row
+    # whose `user` never got saved.
+    if any(e.get("is_running") and _is_mine(e, user) for e in doc.timesheet_entry):
         frappe.throw("A timer is already running. Stop it before starting a new one.")
 
     now = now_datetime()
@@ -498,9 +537,14 @@ def stop_timer(name, notes=None):
 
     # Must match on user too — with several teammates possibly running
     # timers at once on the shared timesheet, "the" active entry is
-    # ambiguous without scoping to this specific user's own row.
+    # ambiguous without scoping to this specific user's own row. Uses the
+    # same lenient _is_mine match start_timer's duplicate check uses — this
+    # is the actual fix for "Stop Timer" doing nothing: if `user` never got
+    # saved on the row (see _entry_user_field_exists above), a strict
+    # e.get("user") == user match here can never find it, even though the
+    # entry visibly shows as running for you.
     active = next(
-        (e for e in doc.timesheet_entry if e.get("is_running") and e.get("user") == user),
+        (e for e in doc.timesheet_entry if e.get("is_running") and _is_mine(e, user)),
         None,
     )
     if not active:
@@ -513,6 +557,10 @@ def stop_timer(name, notes=None):
     active.duration_hours = duration
     active.minutes = round(duration * 60, 2)
     active.is_running = 0
+    # Backfills a blank owner on stop, in addition to start_timer already
+    # setting it on creation — belt-and-suspenders in case the field wasn't
+    # actually saving yet when this row was first punched.
+    active.user = user
     if notes is not None:
         active.notes = notes
 
@@ -566,7 +614,7 @@ def update_entry(name, idx, entry_date=None, start_time=None, end_time=None, dur
         frappe.throw("Entry not found", frappe.DoesNotExistError)
     # Legacy rows punched before the `user` field existed have no owner
     # recorded, so they're left editable rather than locked for everyone.
-    if row.get("user") and row.get("user") != user:
+    if not _is_mine(row, user):
         frappe.throw("You can only edit your own time entries.", frappe.PermissionError)
 
     if entry_date is not None:
@@ -602,7 +650,7 @@ def delete_entry(name, idx):
     row = next((e for e in doc.timesheet_entry if e.idx == idx), None)
     if not row:
         frappe.throw("Entry not found", frappe.DoesNotExistError)
-    if row.get("user") and row.get("user") != user:
+    if not _is_mine(row, user):
         frappe.throw("You can only delete your own time entries.", frappe.PermissionError)
 
     doc.timesheet_entry = [e for e in doc.timesheet_entry if e.idx != idx]
@@ -633,9 +681,16 @@ def get_timesheet_stats():
     whole team's combined time — total_hours (the team figure) is shown on
     the timer screen itself instead.
 
-    Note: entries punched before the Timesheet Entry `user` field existed
-    have no owner recorded, so they won't count toward anyone's personal
-    HOURS TODAY/WEEK until/unless backfilled.
+    That te.user scoping is only added to the SQL below if the column
+    genuinely exists on Timesheet Entry (_entry_user_field_exists). Unlike
+    the doc-object `.get("user")` used elsewhere in this file, which just
+    returns None for a field that isn't there, referencing a column that
+    doesn't exist in raw SQL is a hard database error — and that error was
+    silently swallowed by the dashboard's stats loader, which is why the
+    stat cards were stuck showing "…" instead of an error. If the column
+    is missing, personal figures degrade to 0 rather than crashing the
+    whole dashboard (accurate once you add the field — see
+    DOCTYPE_REQUIREMENTS.md).
     """
     user = _current_user()
     today_str = today()
@@ -665,12 +720,18 @@ def get_timesheet_stats():
     hours_values = dict(values)
     hours_values["today"] = today_str
     hours_values["week_ago"] = week_ago_str
+
+    # "and 1 = 0" rather than just dropping the clause: if the column is
+    # missing, these figures should read as 0 (unknown), not silently
+    # widen into a team-wide total mislabeled as personal.
+    user_scope = "and te.user = %(user)s" if _entry_user_field_exists() else "and 1 = 0"
+
     hours = frappe.db.sql(
         f"""
         select
-            coalesce(sum(case when te.entry_date = %(today)s and te.is_running = 0 and te.user = %(user)s then te.duration_hours else 0 end), 0) as today_hours,
-            coalesce(sum(case when te.entry_date >= %(week_ago)s and te.is_running = 0 and te.user = %(user)s then te.duration_hours else 0 end), 0) as week_hours,
-            sum(case when te.is_running = 1 and te.user = %(user)s then 1 else 0 end) as running_count
+            coalesce(sum(case when te.entry_date = %(today)s and te.is_running = 0 {user_scope} then te.duration_hours else 0 end), 0) as today_hours,
+            coalesce(sum(case when te.entry_date >= %(week_ago)s and te.is_running = 0 {user_scope} then te.duration_hours else 0 end), 0) as week_hours,
+            sum(case when te.is_running = 1 {user_scope} then 1 else 0 end) as running_count
         from `tabTimesheet Entry` te
         inner join `tabEmployee Timesheet` ts on ts.name = te.parent
         where {scope_clause} and te.parenttype = 'Employee Timesheet'
