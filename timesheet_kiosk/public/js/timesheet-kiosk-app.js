@@ -230,7 +230,10 @@ function sheetCard(s) {
         <div class="meta">${s.start_date || ""} &middot; ${flt2(s.total_hours)} hrs</div>
       </div>
       <div class="right">
-        <span class="status-pill ${statusClass}">${(s.status || "").toUpperCase()}</span>
+        <div class="right-top">
+          ${s.is_running_for_me ? `<span class="running-dot" title="Your timer is running"></span>` : ""}
+          <span class="status-pill ${statusClass}">${(s.status || "").toUpperCase()}</span>
+        </div>
       </div>
     </div>
   `;
