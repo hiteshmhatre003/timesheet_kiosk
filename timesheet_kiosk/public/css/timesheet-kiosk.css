@@ -115,9 +115,21 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ink); outli
 .sheet-card .name { font-family: 'Space Grotesk'; font-weight: 700; font-size: 16px; margin-top: 2px; }
 .sheet-card .meta { font-size: 11px; color: var(--sub); margin-top: 6px; }
 .sheet-card .right { text-align: right; }
+.right-top { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .status-pill { font-size: 10px; font-weight: 700; padding: 5px 10px; border-radius: 20px; letter-spacing: 0.04em; display: inline-block; }
 .status-draft { background: #eef2ff; color: #3b4cca; }
 .status-submitted, .status-locked { background: #f1f2f4; color: var(--sub); }
+
+/* Small green dot on a dashboard card = this user personally has a timer
+   running on that timesheet right now (not a teammate's — see
+   is_running_for_me in list_timesheets). */
+.running-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-green);
+}
 .empty-state { text-align: center; padding: 40px 10px; color: var(--sub); font-size: 13px; }
 
 .pagination { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 14px; }
