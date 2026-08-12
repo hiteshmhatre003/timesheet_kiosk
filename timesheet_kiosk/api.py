@@ -365,6 +365,36 @@ def list_wih(search=None):
 # Timesheets
 # ---------------------------------------------------------------------------
 
+def _running_timesheet_names(ts_names, user):
+    """Which of `ts_names` (Employee Timesheet names) currently have a
+    running timer belonging to `user` — powers the small green "running"
+    dot on the dashboard list. Scoped to just the page of names already
+    being displayed (never the whole table), so it stays a cheap add-on
+    rather than reopening the N+1-full-document-load problem the list/stats
+    rewrite fixed.
+
+    Same lenient _is_mine philosophy as everywhere else: a running row with
+    no owner recorded counts as this user's too. If the `user` column
+    doesn't exist yet, this can't be scoped to a specific person at all, so
+    it fails closed (no dot shown) rather than showing everyone's dot to
+    everyone.
+    """
+    if not ts_names or not _entry_user_field_exists():
+        return set()
+    rows = frappe.db.sql(
+        """
+        select distinct te.parent
+        from `tabTimesheet Entry` te
+        where te.parenttype = 'Employee Timesheet'
+          and te.parent in %(names)s
+          and te.is_running = 1
+          and (te.user = %(user)s or te.user is null or te.user = '')
+        """,
+        {"names": tuple(ts_names), "user": user},
+    )
+    return {r[0] for r in rows}
+
+
 @frappe.whitelist()
 def list_timesheets(status=None, wih_number=None, page=1):
     """"My Timesheets" now means: timesheets for a WIH I'm currently
@@ -423,6 +453,10 @@ def list_timesheets(status=None, wih_number=None, page=1):
         {**values, "page_size": PAGE_SIZE, "start": start},
         as_dict=True,
     )
+
+    running_names = _running_timesheet_names([i["name"] for i in items], user)
+    for item in items:
+        item["is_running_for_me"] = item["name"] in running_names
 
     return {"items": items, "total": total, "page": page, "page_size": PAGE_SIZE}
 
