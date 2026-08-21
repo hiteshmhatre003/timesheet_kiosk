@@ -142,8 +142,8 @@ async function renderDashboard() {
   app.innerHTML = topbar() + `
     <div class="screen" id="dashScreen">
       <div id="statsArea" class="stat-grid">
-        <div class="stat-card"><div class="label">HOURS TODAY</div><div class="value">&hellip;</div></div>
-        <div class="stat-card"><div class="label">HOURS WEEK</div><div class="value">&hellip;</div></div>
+        <div class="stat-card"><div class="label">TIME TODAY</div><div class="value">&hellip;</div></div>
+        <div class="stat-card"><div class="label">TIME THIS WEEK</div><div class="value">&hellip;</div></div>
         <div class="stat-card"><div class="label">ACTIVE SHEETS</div><div class="value">&hellip;</div></div>
         <div class="stat-card"><div class="label">STATUS</div><div class="value">&hellip;</div></div>
       </div>
@@ -178,8 +178,8 @@ async function loadStats() {
 
 function statCardsHtml(stats) {
   return `
-    <div class="stat-card"><div class="label">HOURS TODAY</div><div class="value">${flt2(stats.total_hours_today)}</div></div>
-    <div class="stat-card"><div class="label">HOURS WEEK</div><div class="value">${flt2(stats.total_hours_week)}</div></div>
+    <div class="stat-card"><div class="label">TIME TODAY</div><div class="value">${fmtHrsMins(stats.total_hours_today)}</div></div>
+    <div class="stat-card"><div class="label">TIME THIS WEEK</div><div class="value">${fmtHrsMins(stats.total_hours_week)}</div></div>
     <div class="stat-card"><div class="label">ACTIVE SHEETS</div><div class="value">${stats.active_timesheets}</div></div>
     <div class="stat-card"><div class="label">${stats.has_active_timer ? "TIMER RUNNING" : "ALL TIMERS STOPPED"}</div><div class="value">${stats.has_active_timer ? "&#9654;" : "&#9632;"}</div></div>
   `;
@@ -227,7 +227,7 @@ function sheetCard(s) {
       <div>
         <div class="wih">${s.wih_number || ""}</div>
         <div class="name">${s.product_name || s.name}</div>
-        <div class="meta">${s.start_date || ""} &middot; ${flt2(s.total_hours)} hrs</div>
+        <div class="meta">${s.start_date || ""} &middot; ${fmtHrsMins(s.total_hours)}</div>
       </div>
       <div class="right">
         <div class="right-top">
@@ -240,6 +240,17 @@ function sheetCard(s) {
 }
 
 function flt2(v) { return (v || 0).toFixed(2); }
+
+// Converts decimal hours (e.g. 2.5) into "H Hrs M Mins" (e.g. "2 Hrs 30 Mins").
+// Rounds to the nearest whole minute rather than truncating, so 0.99999hrs
+// (a rounding artifact from stored duration_hours) reads as 1 Hr 0 Mins
+// instead of 0 Hrs 59 Mins.
+function fmtHrsMins(v) {
+  const totalMinutes = Math.round((parseFloat(v) || 0) * 60);
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return `${h} Hrs ${m} Mins`;
+}
 
 function wireDashboardControls() {
   document.querySelectorAll(".tab").forEach(tab => {
@@ -432,11 +443,11 @@ async function loadTimerScreen(name) {
         <div class="hours-block-group">
           <div class="hours-block">
             <div class="hours-lbl">MY HOURS</div>
-            <div class="hours-val" id="personalHours">${flt2(doc.personal_hours)}</div>
+            <div class="hours-val" id="personalHours">${fmtHrsMins(doc.personal_hours)}</div>
           </div>
           <div class="hours-block">
             <div class="hours-lbl">TEAM TOTAL</div>
-            <div class="hours-val" id="totalHours">${flt2(doc.total_hours)}</div>
+            <div class="hours-val" id="totalHours">${fmtHrsMins(doc.total_hours)}</div>
           </div>
         </div>
       </div>
@@ -560,7 +571,7 @@ async function loadTimerScreen(name) {
     timerInterval = setInterval(() => {
       const hrs = (Date.now() - startMs) / 3600000;
       const el = document.getElementById("personalHours");
-      if (el) el.textContent = (parseFloat(baseHours) + hrs).toFixed(2);
+      if (el) el.textContent = fmtHrsMins(parseFloat(baseHours) + hrs);
     }, 1000);
   }
 }
