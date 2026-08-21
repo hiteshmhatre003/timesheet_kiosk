@@ -100,7 +100,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ink); outli
 .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 22px; }
 .stat-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
 .stat-card .label { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: var(--sub); margin-bottom: 8px; }
-.stat-card .value { font-family: 'Space Grotesk'; font-size: 26px; font-weight: 700; }
+.stat-card .value { font-family: 'Space Grotesk'; font-size: 18px; font-weight: 700; line-height: 1.25; }
 .section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .section-head h2 { font-size: 18px; }
 .tabs { display: flex; gap: 8px; margin-bottom: 14px; }
@@ -161,13 +161,14 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ink); outli
 @media (max-width: 420px) {
   .two-col { grid-template-columns: 1fr; }
 
-  /* Two hour figures side by side (MY HOURS / TEAM TOTAL) at the default
-     30px size don't reliably fit next to the WIH info block on a narrow
-     phone. Stack the card into two rows and shrink the figures instead. */
+  /* Two hour figures side by side (MY HOURS / TEAM TOTAL) don't reliably
+     fit next to the WIH info block on a narrow phone, especially now that
+     they read as "H Hrs M Mins" instead of a short decimal. Stack the
+     card into two rows and shrink the figures further. */
   .wih-card { flex-direction: column; align-items: flex-start; gap: 16px; }
   .hours-block-group { width: 100%; justify-content: space-between; }
   .wih-card .hours-lbl, .wih-card .hours-val { text-align: left; }
-  .wih-card .hours-val { font-size: 24px; }
+  .wih-card .hours-val { font-size: 16px; }
 }
 
 /* ---------- Timer screen ---------- */
@@ -177,7 +178,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ink); outli
 .wih-card .wih-name { font-family: 'Space Grotesk'; font-size: 24px; font-weight: 700; margin-top: 4px; }
 .wih-card .style { color: var(--sub); font-size: 13px; margin-top: 6px; }
 .wih-card .hours-lbl { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: var(--sub); text-align: right; }
-.wih-card .hours-val { font-family: 'Space Grotesk'; font-size: 30px; font-weight: 700; text-align: right; }
+.wih-card .hours-val { font-family: 'Space Grotesk'; font-size: 20px; font-weight: 700; text-align: right; line-height: 1.25; }
 
 /* The WIH card now shows two figures side by side — this viewer's own
    hours, and the whole team's combined hours (the WIH's timesheet is
