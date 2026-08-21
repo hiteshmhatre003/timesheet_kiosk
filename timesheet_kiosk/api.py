@@ -474,10 +474,17 @@ def create_timesheet(wih_number, product_name=None, start_date=None, end_date=No
     )
     if existing:
         doc = frappe.get_doc(TS_DOCTYPE, existing)
+        # Core Frappe permissions (e.g. a User Permission restricting the
+        # Employee link field) don't know about the WIH-sharing model —
+        # _check_access is the real gate here, so core checks are bypassed
+        # for the rest of this request. See the same comment on the other
+        # mutating functions below for the full rationale.
+        doc.flags.ignore_permissions = True
         _check_access(doc, user)
         return _build_timesheet_response(doc)
 
     doc = frappe.new_doc(TS_DOCTYPE)
+    doc.flags.ignore_permissions = True
     doc.wih_number = wih_number
     doc.user = user
     doc.product_name = product_name
@@ -499,6 +506,13 @@ def get_timesheet(name):
 @frappe.whitelist()
 def update_timesheet(name, product_name=None, start_date=None, end_date=None, notes=None):
     doc = frappe.get_doc(TS_DOCTYPE, name)
+    # Bypass Frappe's core permission engine (e.g. Employee-link User
+    # Permissions) — a shared WIH timesheet's real access rule is
+    # _check_access below, which already accounts for teammates sharing one
+    # document. Core checks don't know about that sharing model and would
+    # otherwise block a teammate whose own Employee record differs from
+    # whoever's Employee is stamped on this doc.
+    doc.flags.ignore_permissions = True
     _check_access(doc)
     if product_name is not None:
         doc.product_name = product_name
@@ -516,6 +530,9 @@ def update_timesheet(name, product_name=None, start_date=None, end_date=None, no
 @frappe.whitelist()
 def submit_timesheet(name):
     doc = frappe.get_doc(TS_DOCTYPE, name)
+    # See update_timesheet's comment — _check_access is the real gate for a
+    # shared timesheet; core perms (incl. submit-level ones) are bypassed.
+    doc.flags.ignore_permissions = True
     _check_access(doc)
 
     # Checked across EVERY entry on the document (not just this user's
@@ -537,6 +554,8 @@ def submit_timesheet(name):
 @frappe.whitelist()
 def start_timer(name, notes=None):
     doc = frappe.get_doc(TS_DOCTYPE, name)
+    # See update_timesheet's comment — _check_access is the real gate.
+    doc.flags.ignore_permissions = True
     user = _current_user()
     _check_access(doc, user)
 
@@ -567,6 +586,8 @@ def start_timer(name, notes=None):
 @frappe.whitelist()
 def stop_timer(name, notes=None):
     doc = frappe.get_doc(TS_DOCTYPE, name)
+    # See update_timesheet's comment — _check_access is the real gate.
+    doc.flags.ignore_permissions = True
     user = _current_user()
     _check_access(doc, user)
 
@@ -610,6 +631,8 @@ def stop_timer(name, notes=None):
 @frappe.whitelist()
 def add_entry(name, entry_date, start_time, end_time, duration_hours=None, notes=None):
     doc = frappe.get_doc(TS_DOCTYPE, name)
+    # See update_timesheet's comment — _check_access is the real gate.
+    doc.flags.ignore_permissions = True
     user = _current_user()
     _check_access(doc, user)
 
@@ -640,6 +663,8 @@ def add_entry(name, entry_date, start_time, end_time, duration_hours=None, notes
 @frappe.whitelist()
 def update_entry(name, idx, entry_date=None, start_time=None, end_time=None, duration_hours=None, notes=None):
     doc = frappe.get_doc(TS_DOCTYPE, name)
+    # See update_timesheet's comment — _check_access is the real gate.
+    doc.flags.ignore_permissions = True
     user = _current_user()
     _check_access(doc, user)
 
@@ -678,6 +703,8 @@ def update_entry(name, idx, entry_date=None, start_time=None, end_time=None, dur
 @frappe.whitelist()
 def delete_entry(name, idx):
     doc = frappe.get_doc(TS_DOCTYPE, name)
+    # See update_timesheet's comment — _check_access is the real gate.
+    doc.flags.ignore_permissions = True
     user = _current_user()
     _check_access(doc, user)
 
