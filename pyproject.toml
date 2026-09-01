@@ -1,9 +1,9 @@
 [project]
-name = "timesheet_kiosk"
+name = "purchase_mobile"
 authors = [
-    { name = "Amal Embroideries Private Limited" }
+    { name = "2nd Innings Handicrafts Private Limited" }
 ]
-description = "Tablet-friendly shop floor timesheet with start/stop timer, built on Employee Timesheet."
+description = "Mobile app for recording purchase entries and browsing stock"
 requires-python = ">=3.10"
 readme = "README.md"
 dynamic = ["version"]
