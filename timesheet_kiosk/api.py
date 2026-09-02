@@ -44,6 +44,11 @@ TS_DOCTYPE = "Employee Timesheet"
 ALLOCATION_DOCTYPE = "Timesheet Allocation"
 PAGE_SIZE = 10
 
+# Only a user with this role may submit (lock) a shared timesheet. Everyone
+# else allocated to the WIH can still log/edit/save their own time entries
+# as before — this only gates the final submit_timesheet() step.
+TIMESHEET_MANAGER_ROLE = "Timesheet Manager"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -161,6 +166,39 @@ def _check_access(doc, user=None):
     frappe.throw("You are not permitted to access this timesheet.", frappe.PermissionError)
 
 
+def _is_timesheet_manager(user=None):
+    user = user or frappe.session.user
+    return TIMESHEET_MANAGER_ROLE in frappe.get_roles(user)
+
+
+def _running_timer_users(doc):
+    """Users (as {"user", "full_name"}) with a currently running entry
+    ANYWHERE on this shared timesheet — the whole team, not just the
+    viewer's own rows (unlike _build_timesheet_response's entry_list,
+    which is deliberately filtered per-viewer). Only meant to be shown to
+    a Timesheet Manager deciding whether they can submit yet; the role
+    gate on who actually SEES this lives in _build_timesheet_response,
+    not here.
+
+    Legacy rows with no `user` recorded (see _is_mine's docstring) are
+    skipped here — there's no name to show for them — but submit_timesheet
+    still blocks on them separately via its own raw is_running check, so a
+    running legacy row can't silently slip through submission just
+    because it can't be attributed to anyone.
+    """
+    running_users = list(dict.fromkeys(
+        e.get("user") for e in (doc.get("timesheet_entry") or [])
+        if e.get("is_running") and e.get("user")
+    ))
+    if not running_users:
+        return []
+    users = frappe.get_all(
+        "User", filters={"name": ["in", running_users]}, fields=["name", "full_name"]
+    )
+    name_map = {u.name: (u.full_name or u.name) for u in users}
+    return [{"user": u, "full_name": name_map.get(u, u)} for u in running_users]
+
+
 def _recalc_total_hours(doc):
     doc.total_hours = round(sum(flt(e.duration_hours) for e in doc.timesheet_entry), 2)
 
@@ -218,6 +256,13 @@ def _build_timesheet_response(doc, user=None):
     if doc.get("wih_number"):
         wih_photo = frappe.db.get_value("Work In Hand", doc.wih_number, "photos")
 
+    # Only a Timesheet Manager needs (or should see) who else still has a
+    # timer running — everyone else just sees their own timer as before.
+    # Scoped to Draft docs only: once submitted there's nothing left to
+    # block, and doc.timesheet_entry's is_running flags are frozen anyway.
+    is_manager = _is_timesheet_manager(user)
+    running_timer_users = _running_timer_users(doc) if (is_manager and doc.docstatus == 0) else []
+
     return {
         "name": doc.name,
         "wih_number": doc.get("wih_number"),
@@ -231,9 +276,16 @@ def _build_timesheet_response(doc, user=None):
         "docstatus": doc.docstatus,
         "total_hours": doc.get("total_hours"),   # whole-team combined total
         "personal_hours": personal_hours,          # this viewer's own total
+        # Set only at submit time, by a Timesheet Manager — the figure
+        # they confirmed, which may differ from total_hours above. Blank
+        # until submission; shown on the frontend as "Final Hrs (as per
+        # Supervisor)" once present.
+        "final_hrs": doc.get("final_hrs"),
         "notes": doc.get("notes"),
         "timesheet_entry": entry_list,             # only this viewer's own rows
         "active_timer_started_at": active_timer_started_at,
+        "is_timesheet_manager": is_manager,
+        "running_timer_users": running_timer_users,
     }
 
 
@@ -295,6 +347,7 @@ def login(usr=None, pwd=None, username=None, password=None):
         "employeeId": usr,
         "employeeName": usr,
         "csrf_token": frappe.sessions.get_csrf_token(),
+        "isTimesheetManager": _is_timesheet_manager(usr),
     }
 
 
@@ -302,7 +355,12 @@ def login(usr=None, pwd=None, username=None, password=None):
 def get_current_user():
     """Equivalent of GET /auth/me"""
     user = _current_user()
-    return {"userId": user, "employeeId": user, "employeeName": user}
+    return {
+        "userId": user,
+        "employeeId": user,
+        "employeeName": user,
+        "isTimesheetManager": _is_timesheet_manager(user),
+    }
 
 
 @frappe.whitelist()
@@ -528,23 +586,57 @@ def update_timesheet(name, product_name=None, start_date=None, end_date=None, no
 
 
 @frappe.whitelist()
-def submit_timesheet(name):
+def submit_timesheet(name, final_hrs=None):
     doc = frappe.get_doc(TS_DOCTYPE, name)
     # See update_timesheet's comment — _check_access is the real gate for a
     # shared timesheet; core perms (incl. submit-level ones) are bypassed.
     doc.flags.ignore_permissions = True
-    _check_access(doc)
+    user = _current_user()
+    _check_access(doc, user)
+
+    # Submitting locks the shared document for the WHOLE team, not just
+    # this user, so only a Timesheet Manager may do it. Everyone else can
+    # still freely log/edit their own entries (plain doc.save(), untouched
+    # by this) — they just can't take the final lock-and-submit step.
+    if not _is_timesheet_manager(user):
+        frappe.throw(
+            "Only a Timesheet Manager can submit this timesheet. "
+            "You can still add or edit your own time entries.",
+            frappe.PermissionError,
+        )
 
     # Checked across EVERY entry on the document (not just this user's
     # own), since submitting locks the shared timesheet for the whole
     # team — if a teammate's timer is still running, submitting now would
-    # freeze their punch mid-run.
-    if any(e.get("is_running") for e in doc.timesheet_entry):
-        frappe.throw("Stop the running timer before submitting the timesheet.")
+    # freeze their punch mid-run. The timer screen already shows the
+    # manager this same running list (via running_timer_users on
+    # get_timesheet) before they ever open the submit dialog; this is the
+    # server-side backstop in case a timer started in the gap between
+    # loading that screen and clicking submit.
+    running = _running_timer_users(doc)
+    if running or any(e.get("is_running") for e in doc.timesheet_entry):
+        names = ", ".join(r["full_name"] for r in running) or "a teammate"
+        frappe.throw(f"Cannot submit — timer still running for: {names}. Ask them to stop it first.")
 
+    final_hrs = flt(final_hrs)
+    if final_hrs <= 0:
+        frappe.throw("Enter the final hours (as confirmed by the supervisor) before submitting.")
+
+    # This is a separate, supervisor-confirmed figure — it does NOT
+    # recompute or overwrite total_hours (the raw sum of logged entries),
+    # it's stored alongside it and is what the app displays back as
+    # "Final Hrs (as per Supervisor)" once submitted.
+    doc.final_hrs = final_hrs
     doc.status = "Submitted"
     doc.save()
     doc.submit()
+
+    # Mirrored onto the linked WIH so anything elsewhere in ERPNext that
+    # reads Work In Hand directly (rather than through this app) sees the
+    # same confirmed figure.
+    if doc.get("wih_number"):
+        frappe.db.set_value("Work In Hand", doc.wih_number, "final_hrs", final_hrs)
+
     frappe.db.commit()
     return _build_timesheet_response(doc)
 
