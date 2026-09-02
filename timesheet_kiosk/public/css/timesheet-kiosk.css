@@ -196,6 +196,28 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--ink); outli
   box-shadow: 0 4px 10px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;
 }
 
+/* Shown once a submitted timesheet carries a supervisor-confirmed final
+   hours figure (final_hrs) — separate from, and doesn't change, the raw
+   MY HOURS / TEAM TOTAL figures above it. */
+.final-hrs-card {
+  background: #eef9f1; border: 1px solid #bfe6cb; border-radius: var(--radius);
+  padding: 14px 16px; margin-bottom: 22px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.final-hrs-card .hours-lbl { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: #1a7a3e; }
+.final-hrs-card .hours-val { font-family: 'Space Grotesk'; font-weight: 700; font-size: 18px; color: #125c2e; }
+
+/* Shown to a Timesheet Manager when a teammate's timer is still running
+   and blocking submit — see running_timer_users in api.py. */
+.warning-box {
+  background: #fff7e6; border: 1px solid #f5cf87; color: #92600a;
+  padding: 10px 12px; border-radius: 8px; font-size: 12px; line-height: 1.5;
+  margin-bottom: 18px;
+}
+
+/* Shown to non-managers on a Draft sheet in place of a Submit button. */
+.info-note { color: var(--sub); font-size: 11px; text-align: center; margin-bottom: 18px; line-height: 1.5; }
+
 .timer-btn {
   width: 100%; padding: 26px; border-radius: 10px; border: none; cursor: pointer;
   font-family: 'Space Grotesk'; font-weight: 700; text-transform: uppercase;
