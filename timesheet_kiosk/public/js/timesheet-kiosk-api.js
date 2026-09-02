@@ -10,7 +10,16 @@ const Store = {
   set csrf(v) { localStorage.setItem("tk_csrf", v); },
   get user() { return localStorage.getItem("tk_user") || ""; },
   set user(v) { localStorage.setItem("tk_user", v); },
-  clear() { localStorage.removeItem("tk_csrf"); localStorage.removeItem("tk_user"); },
+  // Set once at login (see API.login below) and read for the lifetime of
+  // this session — a kiosk login is short-lived enough that a mid-session
+  // role change just needs a fresh sign-in to pick up, same as csrf/user.
+  get isTimesheetManager() { return localStorage.getItem("tk_is_manager") === "true"; },
+  set isTimesheetManager(v) { localStorage.setItem("tk_is_manager", v ? "true" : "false"); },
+  clear() {
+    localStorage.removeItem("tk_csrf");
+    localStorage.removeItem("tk_user");
+    localStorage.removeItem("tk_is_manager");
+  },
 };
 
 async function callMethod(method, args = {}) {
@@ -71,6 +80,7 @@ const API = {
     const res = await callMethod("login", { usr, pwd });
     Store.user = res.userId;
     Store.csrf = res.csrf_token;
+    Store.isTimesheetManager = !!res.isTimesheetManager;
     return res;
   },
 
@@ -94,5 +104,5 @@ const API = {
     return callMethod("add_entry", { name, entry_date, start_time, end_time, notes });
   },
   deleteEntry(name, idx) { return callMethod("delete_entry", { name, idx }); },
-  submitTimesheet(name) { return callMethod("submit_timesheet", { name }); },
+  submitTimesheet(name, final_hrs) { return callMethod("submit_timesheet", { name, final_hrs }); },
 };

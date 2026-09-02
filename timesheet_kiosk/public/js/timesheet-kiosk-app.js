@@ -424,11 +424,22 @@ async function loadTimerScreen(name) {
   const runningRow = doc.timesheet_entry.find(e => e.is_running);
   const isDraft = doc.status === "Draft" && doc.docstatus !== 1;
 
+  // Submitting is now Timesheet Manager-only; everyone else keeps logging
+  // time exactly as before (that's just doc.save(), unaffected by this).
+  const isManager = Store.isTimesheetManager;
+  // Only ever populated for a manager, on a still-Draft doc — see
+  // running_timer_users in _build_timesheet_response (api.py).
+  const runningTeammates = doc.running_timer_users || [];
+  const canSubmitNow = isDraft && isManager && runningTeammates.length === 0;
+
   app.innerHTML = `
     <div class="screen">
       <div class="timer-topbar">
         <button class="back-link" id="backBtn" style="margin:0;">&larr; Back</button>
-        ${isDraft ? `<button class="btn btn-primary" id="submitBtn" style="width:auto; padding:10px 16px; font-size:12px;">&#10003; Submit Timesheet</button>` : `<span class="status-pill status-submitted">SUBMITTED</span>`}
+        ${!isDraft
+          ? `<span class="status-pill status-submitted">SUBMITTED</span>`
+          : (canSubmitNow ? `<button class="btn btn-primary" id="submitBtn" style="width:auto; padding:10px 16px; font-size:12px;">&#10003; Submit Timesheet</button>` : "")
+        }
       </div>
 
       <div class="wih-card">
@@ -451,6 +462,24 @@ async function loadTimerScreen(name) {
           </div>
         </div>
       </div>
+
+      ${!isDraft && doc.final_hrs != null ? `
+        <div class="final-hrs-card">
+          <div class="hours-lbl">FINAL HRS (AS PER SUPERVISOR)</div>
+          <div class="hours-val">${fmtHrsMins(doc.final_hrs)}</div>
+        </div>
+      ` : ""}
+
+      ${isDraft && isManager && runningTeammates.length > 0 ? `
+        <div class="warning-box">
+          &#9201; Timer still running for <strong>${runningTeammates.map(u => u.full_name).join(", ")}</strong>.
+          Ask ${runningTeammates.length > 1 ? "them" : "them"} to stop it before you can submit.
+        </div>
+      ` : ""}
+
+      ${isDraft && !isManager ? `
+        <div class="info-note">Only a Timesheet Manager can submit this timesheet. You can keep logging your time as usual.</div>
+      ` : ""}
 
       ${isDraft ? `
         <button class="timer-btn ${runningRow ? "timer-running" : "btn-green"}" id="timerBtn">
@@ -525,7 +554,7 @@ async function loadTimerScreen(name) {
     };
 
     const submitBtn = document.getElementById("submitBtn");
-    if (submitBtn) submitBtn.onclick = () => showSubmitModal(name);
+    if (submitBtn) submitBtn.onclick = () => showSubmitModal(name, doc.total_hours);
 
     const manualToggle = document.getElementById("manualToggle");
     manualToggle.onclick = () => {
@@ -663,13 +692,21 @@ function showImageModal(url) {
   document.getElementById("imgModalClose").onclick = () => wrap.remove();
 }
 
-function showSubmitModal(name) {
+function showSubmitModal(name, defaultFinalHrs) {
   const wrap = document.createElement("div");
   wrap.className = "modal-backdrop";
   wrap.innerHTML = `
     <div class="modal">
       <h3>Submit Timesheet?</h3>
-      <p>This will <strong>lock</strong> the timesheet and submit it to ERPNext. Once submitted, no further changes can be made. Make sure all your time entries are accurate before proceeding.</p>
+      <p>This will <strong>lock</strong> the timesheet and submit it to ERPNext. Once submitted, no further changes can be made.</p>
+      <div class="field">
+        <label>Final Hrs (as per Supervisor)</label>
+        <input id="finalHrsInput" type="number" step="0.01" min="0" value="${flt2(defaultFinalHrs)}" />
+        <div style="color:var(--sub); font-size:11px; margin-top:6px; line-height:1.4;">
+          Won't change the recorded timesheet hours — this is the confirmed final figure recorded against the WIH.
+        </div>
+      </div>
+      <div id="submitErr"></div>
       <div class="row">
         <button class="btn btn-outline" id="cancelSubmit">Cancel</button>
         <button class="btn btn-primary" id="confirmSubmit">Yes, Submit &amp; Lock</button>
@@ -679,11 +716,18 @@ function showSubmitModal(name) {
   document.body.appendChild(wrap);
   document.getElementById("cancelSubmit").onclick = () => wrap.remove();
   document.getElementById("confirmSubmit").onclick = async () => {
+    const errBox = document.getElementById("submitErr");
+    errBox.innerHTML = "";
+    const finalHrsVal = parseFloat(document.getElementById("finalHrsInput").value);
+    if (isNaN(finalHrsVal) || finalHrsVal <= 0) {
+      errBox.innerHTML = `<div class="error-box">Enter the final hours confirmed by the supervisor.</div>`;
+      return;
+    }
     const btn = document.getElementById("confirmSubmit");
     btn.disabled = true;
     btn.innerHTML = `<span class="spinner"></span>`;
     try {
-      await API.submitTimesheet(name);
+      await API.submitTimesheet(name, finalHrsVal);
       wrap.remove();
       toast("Timesheet submitted");
       navigate("/dashboard");
