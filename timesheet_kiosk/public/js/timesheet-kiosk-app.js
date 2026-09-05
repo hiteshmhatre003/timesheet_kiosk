@@ -52,6 +52,7 @@ function render() {
   if (route === "/login") return renderLogin();
   if (route === "/dashboard") return renderDashboard();
   if (route === "/new") return renderNewTimesheet();
+  if (route === "/report") return renderMyTimesheetReport();
   if (route.startsWith("/timer/")) return renderTimer(route.split("/timer/")[1]);
 
   history.replaceState({}, "", BASE_PATH + "/dashboard");
@@ -288,14 +289,28 @@ function wireSheetList(resp) {
 function topbar() {
   return `
     <div class="topbar">
-      <div class="brand" id="brandHome">
-        <span class="brand-logo">amal</span>
-        <span class="brand-title">TIMESHEET</span>
+      <div style="display:flex; align-items:center; gap:10px;">
+        <button class="icon-btn" id="menuBtn" aria-label="Menu">&#9776;</button>
+        <div class="brand" id="brandHome">
+          <span class="brand-logo">amal</span>
+          <span class="brand-title">TIMESHEET</span>
+        </div>
       </div>
       <div style="display:flex; align-items:center; gap:8px;">
         <span class="user-pill" id="userPill">${Store.user}</span>
         <button class="icon-btn" id="logoutBtn">&#8617; Logout</button>
       </div>
+    </div>
+    <div class="drawer-backdrop" id="drawerBackdrop"></div>
+    <div class="side-drawer" id="sideDrawer">
+      <div class="side-drawer-head">
+        <span class="brand-logo">amal</span>
+        <button class="drawer-close" id="drawerClose" aria-label="Close menu">&times;</button>
+      </div>
+      <nav class="side-drawer-nav">
+        <div class="drawer-link" id="navDashboard">Dashboard</div>
+        <div class="drawer-link" id="navReport">My Timesheet</div>
+      </nav>
     </div>
   `;
 }
@@ -306,6 +321,21 @@ function wireTopbar() {
 
   const brand = document.getElementById("brandHome");
   if (brand) brand.onclick = () => navigate("/dashboard");
+
+  const menuBtn = document.getElementById("menuBtn");
+  const drawer = document.getElementById("sideDrawer");
+  const backdrop = document.getElementById("drawerBackdrop");
+  const closeBtn = document.getElementById("drawerClose");
+  const openDrawer = () => { drawer.classList.add("open"); backdrop.classList.add("open"); };
+  const closeDrawer = () => { drawer.classList.remove("open"); backdrop.classList.remove("open"); };
+  if (menuBtn) menuBtn.onclick = openDrawer;
+  if (closeBtn) closeBtn.onclick = closeDrawer;
+  if (backdrop) backdrop.onclick = closeDrawer;
+
+  const navDashboard = document.getElementById("navDashboard");
+  if (navDashboard) navDashboard.onclick = () => { closeDrawer(); navigate("/dashboard"); };
+  const navReport = document.getElementById("navReport");
+  if (navReport) navReport.onclick = () => { closeDrawer(); navigate("/report"); };
 }
 
 function fab() {
@@ -355,8 +385,8 @@ async function renderNewTimesheet() {
             <input id="startDate" type="date" value="${today}" />
           </div>
           <div class="field">
-            <label>Style Code (Optional)</label>
-            <input id="styleCode" type="text" placeholder="e.g. Widget A" />
+            <label>Style Code</label>
+            <input id="styleCode" type="text" placeholder="Select a WIH above" readonly />
           </div>
         </div>
         <button class="btn btn-primary" id="createBtn" style="margin-top:6px;">Create Timesheet</button>
@@ -365,6 +395,17 @@ async function renderNewTimesheet() {
   `;
 
   document.getElementById("backBtn").onclick = () => navigate("/dashboard");
+
+  // Style Code is fetched from the selected WIH's own client_code field
+  // (see list_wih in api.py) rather than typed — wihList already carries
+  // it per row, so no extra round trip is needed on selection.
+  const wihSelect = document.getElementById("wihSelect");
+  const styleCodeInput = document.getElementById("styleCode");
+  wihSelect.onchange = () => {
+    const selected = wihList.find(w => w.name === wihSelect.value);
+    styleCodeInput.value = (selected && selected.client_code) || "";
+  };
+
   document.getElementById("createBtn").onclick = async () => {
     const wih = document.getElementById("wihSelect").value;
     const startDate = document.getElementById("startDate").value;
@@ -387,6 +428,111 @@ async function renderNewTimesheet() {
       btn.textContent = "Create Timesheet";
     }
   };
+}
+
+// ------------------------------------------------------------------
+// MY TIMESHEET REPORT
+// ------------------------------------------------------------------
+// Defaults to the current calendar month so far — a reasonable starting
+// window for a payroll-style report; both dates are freely editable.
+let reportFrom = null;
+let reportTo = null;
+let reportStatus = "All";
+
+function defaultReportRange() {
+  const now = new Date();
+  const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
+  const todayStr = now.toISOString().slice(0, 10);
+  return { firstOfMonth, todayStr };
+}
+
+async function renderMyTimesheetReport() {
+  if (!reportFrom || !reportTo) {
+    const { firstOfMonth, todayStr } = defaultReportRange();
+    reportFrom = reportFrom || firstOfMonth;
+    reportTo = reportTo || todayStr;
+  }
+
+  app.innerHTML = topbar() + `
+    <div class="screen" id="reportScreen">
+      <div class="section-head"><h2>My Timesheet</h2></div>
+      <div class="two-col" style="margin-bottom:14px;">
+        <div class="field" style="margin-bottom:0;">
+          <label>From Date</label>
+          <input id="reportFromInput" type="date" value="${reportFrom}" />
+        </div>
+        <div class="field" style="margin-bottom:0;">
+          <label>To Date</label>
+          <input id="reportToInput" type="date" value="${reportTo}" />
+        </div>
+      </div>
+      <div class="tabs" style="margin-bottom:16px;">
+        ${["All", "Draft", "Submitted"].map(f => `<div class="tab ${f === reportStatus ? "active" : ""}" data-status="${f}">${f.toUpperCase()}</div>`).join("")}
+      </div>
+      <div id="reportListArea"><div class="loading-center">Loading…</div></div>
+    </div>
+  `;
+
+  wireTopbar();
+
+  document.getElementById("reportFromInput").onchange = (e) => { reportFrom = e.target.value; loadReport(); };
+  document.getElementById("reportToInput").onchange = (e) => { reportTo = e.target.value; loadReport(); };
+  document.querySelectorAll("#reportScreen .tab").forEach(tab => {
+    tab.onclick = () => {
+      reportStatus = tab.dataset.status;
+      document.querySelectorAll("#reportScreen .tab").forEach(t => t.classList.toggle("active", t === tab));
+      loadReport();
+    };
+  });
+
+  loadReport();
+}
+
+async function loadReport() {
+  const area = document.getElementById("reportListArea");
+  if (!area) return;
+  if (!reportFrom || !reportTo) return;
+  area.innerHTML = `<div class="loading-center">Loading…</div>`;
+  try {
+    const rows = await API.getMyTimesheetReport(reportFrom, reportTo, reportStatus === "All" ? undefined : reportStatus);
+    area.innerHTML = reportListHtml(rows);
+    wireReportList();
+  } catch (e) {
+    area.innerHTML = `<div class="error-box">${e.message}</div>`;
+  }
+}
+
+function reportListHtml(rows) {
+  if (!rows.length) return `<div class="empty-state">No time logged in this range.</div>`;
+  return `<div id="reportList">${rows.map(reportRow).join("")}</div>`;
+}
+
+function reportRow(r) {
+  const statusClass = r.status === "Draft" ? "status-draft" : "status-submitted";
+  const dateRange = r.first_entry_date === r.last_entry_date
+    ? (r.first_entry_date || "")
+    : `${r.first_entry_date || ""} – ${r.last_entry_date || ""}`;
+  return `
+    <div class="sheet-card" data-name="${r.name}">
+      <div>
+        <div class="wih">${r.wih_number || ""}</div>
+        <div class="name">${r.product_name || r.name}</div>
+        <div class="meta">${dateRange} &middot; ${fmtHrsMins(r.personal_hours)}</div>
+      </div>
+      <div class="right">
+        <div class="right-top">
+          <span class="status-pill ${statusClass}">${(r.status || "").toUpperCase()}</span>
+        </div>
+        ${r.final_hrs != null ? `<div class="meta" style="margin-top:6px;">Final: ${fmtHrsMins(r.final_hrs)}</div>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function wireReportList() {
+  document.querySelectorAll("#reportList .sheet-card").forEach(card => {
+    card.onclick = () => navigate(`/timer/${card.dataset.name}`);
+  });
 }
 
 // ------------------------------------------------------------------
