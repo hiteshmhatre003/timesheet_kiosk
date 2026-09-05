@@ -416,7 +416,21 @@ def list_wih(search=None):
         s = search.lower()
         allocated_wih = [w for w in allocated_wih if s in w.lower()]
 
-    return [{"name": w, "product_name": None, "status": None} for w in allocated_wih]
+    # client_code powers the Style Code field on the New Timesheet screen —
+    # fetched here (once, in bulk) rather than the frontend calling back
+    # per-selection, since the whole allocated list is already small and
+    # already being sent down.
+    client_codes = {}
+    if allocated_wih:
+        rows = frappe.get_all(
+            "Work In Hand", filters={"name": ["in", allocated_wih]}, fields=["name", "client_code"]
+        )
+        client_codes = {r.name: r.client_code for r in rows}
+
+    return [
+        {"name": w, "product_name": None, "status": None, "client_code": client_codes.get(w)}
+        for w in allocated_wih
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -549,6 +563,7 @@ def create_timesheet(wih_number, product_name=None, start_date=None, end_date=No
     doc.start_date = start_date or today()
     doc.end_date = end_date
     doc.status = "Draft"
+    doc.total_hours = 0
     doc.insert()
     frappe.db.commit()
     return _build_timesheet_response(doc)
@@ -670,6 +685,16 @@ def start_timer(name, notes=None):
         "is_running": 1,
         "user": user,
     })
+    # THE FIX: this call was missing here (stop_timer/add_entry/etc. all
+    # had it). total_hours is a field this app maintains itself — nothing
+    # in core Frappe recalculates it — so saving a fresh timer-start entry
+    # without refreshing it first was writing back a stale/blank value on
+    # top of whatever was correctly saved before. That showed up as TEAM
+    # TOTAL reading "0 Hrs 0 Mins" the moment a timer started, even though
+    # the team already had hours logged, while MY HOURS stayed correct
+    # because personal_hours is always computed fresh in
+    # _build_timesheet_response rather than read from a stored field.
+    _recalc_total_hours(doc)
     doc.save()
     frappe.db.commit()
     return _build_timesheet_response(doc)
@@ -902,3 +927,81 @@ def get_timesheet_stats():
         "total_hours_week": round(flt(hours.week_hours), 2),
         "has_active_timer": bool(hours.running_count),
     }
+
+
+# --- My Timesheet report ----------------------------------------------------
+
+@frappe.whitelist()
+def get_my_timesheet_report(from_date, to_date, status=None):
+    """Powers the "My Timesheet" screen — one row per shared Employee
+    Timesheet this user personally logged time against within
+    [from_date, to_date], showing only THIS user's own hours for that
+    window (not the whole team's — see personal_hours elsewhere for the
+    same "my slice, not the shared total" distinction).
+
+    A fresh lean SQL aggregate rather than looping frappe.get_doc per
+    matching timesheet, same reasoning as get_timesheet_stats/
+    list_timesheets: a wide date range can span many timesheets, and this
+    is a report a user may run often.
+
+    status: None/"All" -> Draft + Submitted (never Cancelled). "Draft" ->
+    docstatus 0 only. "Submitted" -> docstatus 1 only.
+    """
+    user = _current_user()
+    if not from_date or not to_date:
+        frappe.throw("Please select both a from date and a to date.")
+
+    if status == "Draft":
+        status_clause = "and et.docstatus = 0"
+    elif status == "Submitted":
+        status_clause = "and et.docstatus = 1"
+    else:
+        status_clause = "and et.docstatus in (0, 1)"
+
+    # Same fail-closed reasoning as _running_timesheet_names: without the
+    # `user` column there's no reliable way to scope this to "my" entries
+    # specifically, so an empty report is safer than one that quietly
+    # shows everyone's hours as if they were this user's own.
+    if not _entry_user_field_exists():
+        return []
+
+    rows = frappe.db.sql(
+        f"""
+        select
+            et.name,
+            et.wih_number,
+            et.product_name,
+            et.status,
+            et.docstatus,
+            et.final_hrs,
+            sum(te.duration_hours) as personal_hours,
+            min(te.entry_date) as first_entry_date,
+            max(te.entry_date) as last_entry_date
+        from `tabTimesheet Entry` te
+        inner join `tabEmployee Timesheet` et on et.name = te.parent
+        where te.parenttype = 'Employee Timesheet'
+          and te.entry_date between %(from_date)s and %(to_date)s
+          and (te.is_running = 0 or te.is_running is null)
+          and (te.user = %(user)s or te.user is null or te.user = '')
+          {status_clause}
+        group by et.name
+        order by max(te.entry_date) desc
+        """,
+        {"user": user, "from_date": from_date, "to_date": to_date},
+        as_dict=True,
+    )
+
+    return [
+        {
+            "name": r.name,
+            "wih_number": r.wih_number,
+            "product_name": r.product_name,
+            "status": r.status or "Draft",
+            "docstatus": r.docstatus,
+            "final_hrs": r.final_hrs,
+            "personal_hours": round(flt(r.personal_hours), 2),
+            "first_entry_date": str(r.first_entry_date) if r.first_entry_date else None,
+            "last_entry_date": str(r.last_entry_date) if r.last_entry_date else None,
+        }
+        for r in rows
+    ]
