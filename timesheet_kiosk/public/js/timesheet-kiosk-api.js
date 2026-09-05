@@ -105,4 +105,7 @@ const API = {
   },
   deleteEntry(name, idx) { return callMethod("delete_entry", { name, idx }); },
   submitTimesheet(name, final_hrs) { return callMethod("submit_timesheet", { name, final_hrs }); },
+  getMyTimesheetReport(from_date, to_date, status) {
+    return callMethod("get_my_timesheet_report", { from_date, to_date, status });
+  },
 };
