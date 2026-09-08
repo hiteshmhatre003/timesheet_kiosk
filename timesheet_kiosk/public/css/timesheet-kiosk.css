@@ -258,6 +258,28 @@ input[readonly] { background: var(--bg); color: var(--sub); }
 .entry-row .del { color: var(--danger); cursor: pointer; background: none; border: none; font-size: 14px; }
 .entry-row .running-badge { color: var(--accent-green); font-weight: 700; }
 
+/* ---------- My Timesheet report (date-wise, per WIH) ---------- */
+.report-cols {
+  display: grid; grid-template-columns: 0.9fr 1.7fr 1fr 0.9fr;
+  padding: 10px 18px; font-size: 9px; font-weight: 700; letter-spacing: 0.06em;
+  color: var(--sub); border-bottom: 1px solid var(--line);
+}
+.report-row {
+  display: grid; grid-template-columns: 0.9fr 1.7fr 1fr 0.9fr;
+  padding: 12px 18px; font-size: 12px; align-items: center;
+  border-bottom: 1px solid #f0f1f3; cursor: pointer;
+}
+.report-row:last-child { border-bottom: none; }
+.report-row:active { background: var(--bg); }
+.report-row .report-wih { font-weight: 700; }
+.report-row .report-style { font-size: 10px; color: var(--sub); margin-top: 2px; }
+.report-row .hrs { font-family: 'Space Grotesk'; font-weight: 700; }
+.report-footer {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 18px; font-family: 'Space Grotesk'; font-weight: 700; font-size: 13px;
+  background: var(--bg); border-top: 1px solid var(--line);
+}
+
 .manual-card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; margin-bottom: 18px; }
 .manual-head { padding: 18px 20px 14px; border-bottom: 1px solid var(--line); }
 .manual-head .title { display: flex; align-items: center; gap: 8px; font-family: 'Space Grotesk'; font-weight: 700; font-size: 16px; cursor: pointer; }
