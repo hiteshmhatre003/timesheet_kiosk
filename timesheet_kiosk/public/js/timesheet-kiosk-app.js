@@ -504,34 +504,38 @@ async function loadReport() {
 
 function reportListHtml(rows) {
   if (!rows.length) return `<div class="empty-state">No time logged in this range.</div>`;
-  return `<div id="reportList">${rows.map(reportRow).join("")}</div>`;
-}
-
-function reportRow(r) {
-  const statusClass = r.status === "Draft" ? "status-draft" : "status-submitted";
-  const dateRange = r.first_entry_date === r.last_entry_date
-    ? (r.first_entry_date || "")
-    : `${r.first_entry_date || ""} – ${r.last_entry_date || ""}`;
+  const totalHours = rows.reduce((sum, r) => sum + (parseFloat(r.hours) || 0), 0);
   return `
-    <div class="sheet-card" data-name="${r.name}">
-      <div>
-        <div class="wih">${r.wih_number || ""}</div>
-        <div class="name">${r.product_name || r.name}</div>
-        <div class="meta">${dateRange} &middot; ${fmtHrsMins(r.personal_hours)}</div>
-      </div>
-      <div class="right">
-        <div class="right-top">
-          <span class="status-pill ${statusClass}">${(r.status || "").toUpperCase()}</span>
-        </div>
-        ${r.final_hrs != null ? `<div class="meta" style="margin-top:6px;">Final: ${fmtHrsMins(r.final_hrs)}</div>` : ""}
-      </div>
+    <div class="entries-card">
+      <div class="report-cols"><div>DATE</div><div>WIH</div><div>HOURS</div><div>STATUS</div></div>
+      <div id="reportList">${rows.map(reportRow).join("")}</div>
+      <div class="report-footer"><span>TOTAL</span><span>${fmtHrsMins(totalHours)}</span></div>
     </div>
   `;
 }
 
+function reportRow(r) {
+  const statusClass = r.status === "Draft" ? "status-draft" : "status-submitted";
+  return `
+    <div class="report-row" data-name="${r.name}">
+      <div>${r.entry_date || ""}</div>
+      <div>
+        <div class="report-wih">${r.wih_number || ""}</div>
+        ${r.product_name ? `<div class="report-style">${r.product_name}</div>` : ""}
+      </div>
+      <div class="hrs">${fmtHrsMins(r.hours)}</div>
+      <div><span class="status-pill ${statusClass}">${(r.status || "").toUpperCase()}</span></div>
+    </div>
+  `;
+}
+
+// Clicking a row opens that WIH's timesheet with ?from=report on the URL —
+// the timer screen's Back button reads that (see loadTimerScreen) to
+// return here instead of the dashboard, so the trip out and back doesn't
+// lose your place in the report.
 function wireReportList() {
-  document.querySelectorAll("#reportList .sheet-card").forEach(card => {
-    card.onclick = () => navigate(`/timer/${card.dataset.name}`);
+  document.querySelectorAll("#reportList .report-row").forEach(row => {
+    row.onclick = () => navigate(`/timer/${row.dataset.name}?from=report`);
   });
 }
 
@@ -677,7 +681,13 @@ async function loadTimerScreen(name) {
     </div>
   `;
 
-  document.getElementById("backBtn").onclick = () => navigate("/dashboard");
+  // If this timesheet was opened from a My Timesheet report row (see
+  // wireReportList), Back should return there — not the dashboard — so
+  // the report's date range/status filter and results are still there
+  // (reportFrom/reportTo/reportStatus are held in module state and
+  // renderMyTimesheetReport re-fetches with them on the way back).
+  const cameFromReport = new URLSearchParams(location.search).get("from") === "report";
+  document.getElementById("backBtn").onclick = () => navigate(cameFromReport ? "/report" : "/dashboard");
 
   const wihThumb = document.getElementById("wihThumb");
   if (wihThumb) wihThumb.onclick = () => showImageModal(doc.wih_photo);
