@@ -496,6 +496,11 @@ def list_timesheets(status=None, wih_number=None, page=1):
         status_clause = "and ts.docstatus = 0"
     elif status == "Submitted":
         status_clause = "and ts.docstatus = 1"
+    else:
+        # "All" means every non-Cancelled timesheet (Draft + Submitted) —
+        # a Cancelled Employee Timesheet is a voided document and
+        # shouldn't clutter a list the user is actively working from.
+        status_clause = "and ts.docstatus != 2"
 
     search_clause = ""
     if wih_number:
@@ -890,7 +895,7 @@ def get_timesheet_stats():
             sum(case when docstatus = 0 then 1 else 0 end) as active,
             sum(case when docstatus = 1 then 1 else 0 end) as submitted
         from `tabEmployee Timesheet` ts
-        where {scope_clause}
+        where {scope_clause} and ts.docstatus != 2
         """,
         values,
         as_dict=True,
@@ -913,7 +918,7 @@ def get_timesheet_stats():
             sum(case when te.is_running = 1 {user_scope} then 1 else 0 end) as running_count
         from `tabTimesheet Entry` te
         inner join `tabEmployee Timesheet` ts on ts.name = te.parent
-        where {scope_clause} and te.parenttype = 'Employee Timesheet'
+        where {scope_clause} and ts.docstatus != 2 and te.parenttype = 'Employee Timesheet'
         """,
         hours_values,
         as_dict=True,
@@ -933,16 +938,21 @@ def get_timesheet_stats():
 
 @frappe.whitelist()
 def get_my_timesheet_report(from_date, to_date, status=None):
-    """Powers the "My Timesheet" screen — one row per shared Employee
-    Timesheet this user personally logged time against within
-    [from_date, to_date], showing only THIS user's own hours for that
-    window (not the whole team's — see personal_hours elsewhere for the
-    same "my slice, not the shared total" distinction).
+    """Powers the "My Timesheet" report screen — one row per (date, WIH)
+    this user personally logged time against within [from_date, to_date],
+    e.g. "01-Sep-26 / WIH-0000005 / 5.5 hrs". Only THIS user's own hours
+    (not the whole shared timesheet's team total).
 
-    A fresh lean SQL aggregate rather than looping frappe.get_doc per
-    matching timesheet, same reasoning as get_timesheet_stats/
-    list_timesheets: a wide date range can span many timesheets, and this
-    is a report a user may run often.
+    Grouped by (entry_date, et.name) rather than (entry_date, wih_number)
+    — equivalent in practice (a WIH has at most one open/submitted
+    Employee Timesheet at a time, per list_wih's exclusion rule) but this
+    way et.name — needed for the frontend's click-through to that
+    timesheet — falls straight out of the group by, rather than needing a
+    second lookup per row.
+
+    A fresh lean SQL aggregate rather than looping frappe.get_doc per row,
+    same reasoning as get_timesheet_stats/list_timesheets: a wide date
+    range can span many rows, and this is a report a user may run often.
 
     status: None/"All" -> Draft + Submitted (never Cancelled). "Draft" ->
     docstatus 0 only. "Submitted" -> docstatus 1 only.
@@ -969,14 +979,13 @@ def get_my_timesheet_report(from_date, to_date, status=None):
         f"""
         select
             et.name,
+            te.entry_date,
             et.wih_number,
             et.product_name,
             et.status,
             et.docstatus,
             et.final_hrs,
-            sum(te.duration_hours) as personal_hours,
-            min(te.entry_date) as first_entry_date,
-            max(te.entry_date) as last_entry_date
+            sum(te.duration_hours) as day_hours
         from `tabTimesheet Entry` te
         inner join `tabEmployee Timesheet` et on et.name = te.parent
         where te.parenttype = 'Employee Timesheet'
@@ -984,8 +993,8 @@ def get_my_timesheet_report(from_date, to_date, status=None):
           and (te.is_running = 0 or te.is_running is null)
           and (te.user = %(user)s or te.user is null or te.user = '')
           {status_clause}
-        group by et.name
-        order by max(te.entry_date) desc
+        group by te.entry_date, et.name
+        order by te.entry_date desc, et.wih_number
         """,
         {"user": user, "from_date": from_date, "to_date": to_date},
         as_dict=True,
@@ -994,14 +1003,13 @@ def get_my_timesheet_report(from_date, to_date, status=None):
     return [
         {
             "name": r.name,
+            "entry_date": str(r.entry_date) if r.entry_date else None,
             "wih_number": r.wih_number,
             "product_name": r.product_name,
             "status": r.status or "Draft",
             "docstatus": r.docstatus,
             "final_hrs": r.final_hrs,
-            "personal_hours": round(flt(r.personal_hours), 2),
-            "first_entry_date": str(r.first_entry_date) if r.first_entry_date else None,
-            "last_entry_date": str(r.last_entry_date) if r.last_entry_date else None,
+            "hours": round(flt(r.day_hours), 2),
         }
         for r in rows
     ]
