@@ -433,26 +433,18 @@ async function renderNewTimesheet() {
 // ------------------------------------------------------------------
 // MY TIMESHEET REPORT
 // ------------------------------------------------------------------
-// Defaults to the current calendar month so far — a reasonable starting
-// window for a payroll-style report; both dates are freely editable.
-let reportFrom = null;
-let reportTo = null;
+// Nothing is fetched until the user actually picks a filter — a blank
+// screen on load rather than defaulting to "this month" and firing a
+// query nobody asked for. Date range and WIH search are independent:
+// either one alone is enough to generate the report, and both together
+// narrow further. See maybeLoadReport.
+let reportFrom = "";
+let reportTo = "";
+let reportWih = "";
 let reportStatus = "All";
-
-function defaultReportRange() {
-  const now = new Date();
-  const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10);
-  const todayStr = now.toISOString().slice(0, 10);
-  return { firstOfMonth, todayStr };
-}
+let reportSearchDebounce = null;
 
 async function renderMyTimesheetReport() {
-  if (!reportFrom || !reportTo) {
-    const { firstOfMonth, todayStr } = defaultReportRange();
-    reportFrom = reportFrom || firstOfMonth;
-    reportTo = reportTo || todayStr;
-  }
-
   app.innerHTML = topbar() + `
     <div class="screen" id="reportScreen">
       <div class="section-head"><h2>My Timesheet</h2></div>
@@ -466,35 +458,70 @@ async function renderMyTimesheetReport() {
           <input id="reportToInput" type="date" value="${reportTo}" />
         </div>
       </div>
+      <div class="field">
+        <label>WIH Number</label>
+        <input id="reportWihInput" type="text" placeholder="Search by WIH number…" value="${reportWih}" />
+      </div>
       <div class="tabs" style="margin-bottom:16px;">
         ${["All", "Draft", "Submitted"].map(f => `<div class="tab ${f === reportStatus ? "active" : ""}" data-status="${f}">${f.toUpperCase()}</div>`).join("")}
       </div>
-      <div id="reportListArea"><div class="loading-center">Loading…</div></div>
+      <div id="reportListArea"></div>
     </div>
   `;
 
   wireTopbar();
 
-  document.getElementById("reportFromInput").onchange = (e) => { reportFrom = e.target.value; loadReport(); };
-  document.getElementById("reportToInput").onchange = (e) => { reportTo = e.target.value; loadReport(); };
+  document.getElementById("reportFromInput").onchange = (e) => { reportFrom = e.target.value; maybeLoadReport(); };
+  document.getElementById("reportToInput").onchange = (e) => { reportTo = e.target.value; maybeLoadReport(); };
+
+  const wihInput = document.getElementById("reportWihInput");
+  wihInput.addEventListener("input", () => {
+    clearTimeout(reportSearchDebounce);
+    reportSearchDebounce = setTimeout(() => {
+      reportWih = wihInput.value.trim();
+      maybeLoadReport();
+    }, 350);
+  });
+
   document.querySelectorAll("#reportScreen .tab").forEach(tab => {
     tab.onclick = () => {
       reportStatus = tab.dataset.status;
       document.querySelectorAll("#reportScreen .tab").forEach(t => t.classList.toggle("active", t === tab));
-      loadReport();
+      maybeLoadReport();
     };
   });
 
-  loadReport();
+  // Re-running this on entry (rather than only from the input handlers
+  // above) is what makes returning here from a timesheet — see the
+  // ?from=report Back-button handling in loadTimerScreen — re-show the
+  // same filters/results the user had before they tapped a row, since
+  // reportFrom/reportTo/reportWih/reportStatus are held in module state.
+  maybeLoadReport();
 }
 
-async function loadReport() {
+function maybeLoadReport() {
   const area = document.getElementById("reportListArea");
   if (!area) return;
-  if (!reportFrom || !reportTo) return;
+  const hasRange = !!(reportFrom && reportTo);
+  const hasWih = !!reportWih;
+  if (!hasRange && !hasWih) {
+    area.innerHTML = `<div class="empty-state">Select a date range or search a WIH number to see your timesheet.</div>`;
+    return;
+  }
+  loadReport(hasRange, hasWih);
+}
+
+async function loadReport(hasRange, hasWih) {
+  const area = document.getElementById("reportListArea");
+  if (!area) return;
   area.innerHTML = `<div class="loading-center">Loading…</div>`;
   try {
-    const rows = await API.getMyTimesheetReport(reportFrom, reportTo, reportStatus === "All" ? undefined : reportStatus);
+    const rows = await API.getMyTimesheetReport(
+      hasRange ? reportFrom : undefined,
+      hasRange ? reportTo : undefined,
+      hasWih ? reportWih : undefined,
+      reportStatus === "All" ? undefined : reportStatus
+    );
     area.innerHTML = reportListHtml(rows);
     wireReportList();
   } catch (e) {
@@ -503,7 +530,7 @@ async function loadReport() {
 }
 
 function reportListHtml(rows) {
-  if (!rows.length) return `<div class="empty-state">No time logged in this range.</div>`;
+  if (!rows.length) return `<div class="empty-state">No time logged matching these filters.</div>`;
   const totalHours = rows.reduce((sum, r) => sum + (parseFloat(r.hours) || 0), 0);
   return `
     <div class="entries-card">
