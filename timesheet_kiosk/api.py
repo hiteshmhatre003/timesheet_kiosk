@@ -937,11 +937,26 @@ def get_timesheet_stats():
 # --- My Timesheet report ----------------------------------------------------
 
 @frappe.whitelist()
-def get_my_timesheet_report(from_date, to_date, status=None):
+def get_my_timesheet_report(from_date=None, to_date=None, wih_number=None, status=None):
     """Powers the "My Timesheet" report screen — one row per (date, WIH)
-    this user personally logged time against within [from_date, to_date],
-    e.g. "01-Sep-26 / WIH-0000005 / 5.5 hrs". Only THIS user's own hours
-    (not the whole shared timesheet's team total).
+    this user personally logged time against, e.g.
+    "01-Sep-26 / WIH-0000005 / 5.5 hrs". Only THIS user's own hours (not
+    the whole shared timesheet's team total).
+
+    Date range and WIH search are independent filters and both optional —
+    at least one is required (the frontend only calls this once the user
+    has actually chosen a filter, rather than dumping the user's whole
+    history unfiltered): a WIH search with no date range covers all time
+    for that WIH; a date range with no WIH search covers every WIH in
+    that window; both together narrow to their intersection.
+
+    from_date/to_date must both be given to apply a date filter — one
+    without the other is treated as "no range chosen" and ignored, rather
+    than guessing an open-ended bound.
+
+    wih_number is a substring match (case-sensitive per MySQL's default
+    collation, same as list_timesheets' WIH search), not an exact one, so
+    a partial WIH number still finds it.
 
     Grouped by (entry_date, et.name) rather than (entry_date, wih_number)
     — equivalent in practice (a WIH has at most one open/submitted
@@ -958,8 +973,11 @@ def get_my_timesheet_report(from_date, to_date, status=None):
     docstatus 0 only. "Submitted" -> docstatus 1 only.
     """
     user = _current_user()
-    if not from_date or not to_date:
-        frappe.throw("Please select both a from date and a to date.")
+    wih_number = (wih_number or "").strip()
+    has_range = bool(from_date) and bool(to_date)
+    has_wih = bool(wih_number)
+    if not has_range and not has_wih:
+        frappe.throw("Select a date range or search by WIH number to generate the report.")
 
     if status == "Draft":
         status_clause = "and et.docstatus = 0"
@@ -968,12 +986,22 @@ def get_my_timesheet_report(from_date, to_date, status=None):
     else:
         status_clause = "and et.docstatus in (0, 1)"
 
+    date_clause = "and te.entry_date between %(from_date)s and %(to_date)s" if has_range else ""
+    wih_clause = "and et.wih_number like %(wih)s" if has_wih else ""
+
     # Same fail-closed reasoning as _running_timesheet_names: without the
     # `user` column there's no reliable way to scope this to "my" entries
     # specifically, so an empty report is safer than one that quietly
     # shows everyone's hours as if they were this user's own.
     if not _entry_user_field_exists():
         return []
+
+    values = {"user": user}
+    if has_range:
+        values["from_date"] = from_date
+        values["to_date"] = to_date
+    if has_wih:
+        values["wih"] = f"%{wih_number}%"
 
     rows = frappe.db.sql(
         f"""
@@ -989,14 +1017,15 @@ def get_my_timesheet_report(from_date, to_date, status=None):
         from `tabTimesheet Entry` te
         inner join `tabEmployee Timesheet` et on et.name = te.parent
         where te.parenttype = 'Employee Timesheet'
-          and te.entry_date between %(from_date)s and %(to_date)s
           and (te.is_running = 0 or te.is_running is null)
           and (te.user = %(user)s or te.user is null or te.user = '')
+          {date_clause}
+          {wih_clause}
           {status_clause}
         group by te.entry_date, et.name
         order by te.entry_date desc, et.wih_number
         """,
-        {"user": user, "from_date": from_date, "to_date": to_date},
+        values,
         as_dict=True,
     )
 
