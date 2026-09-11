@@ -227,6 +227,23 @@ def _build_timesheet_response(doc, user=None):
     if active_entry:
         active_timer_started_at = str(active_entry.start_time).replace(" ", "T")
 
+    # Elapsed hours for the user's own running entry, computed exactly the
+    # way stop_timer() computes a finished entry's duration —
+    # time_diff_in_hours(now_datetime(), start_time), both naive datetimes
+    # in the site's own configured timezone. The frontend's live ticker
+    # must add THIS to personal_hours, not re-derive elapsed time itself
+    # from active_timer_started_at: that string carries no timezone
+    # marker, so a browser whose local zone differs from the site's
+    # System Settings timezone parses it as if it WERE in the browser's
+    # own zone, silently shifting "elapsed" by the difference between the
+    # two zones. That mismatch is what made "My Hours" show a wildly
+    # inflated figure (hours, not minutes) for the whole time a timer ran.
+    active_timer_elapsed_hours = None
+    if active_entry:
+        active_timer_elapsed_hours = round(
+            time_diff_in_hours(now_datetime(), active_entry.start_time), 4
+        )
+
     entry_list = []
     for e in sorted(my_entries, key=lambda row: row.idx):
         entry_list.append({
@@ -284,6 +301,7 @@ def _build_timesheet_response(doc, user=None):
         "notes": doc.get("notes"),
         "timesheet_entry": entry_list,             # only this viewer's own rows
         "active_timer_started_at": active_timer_started_at,
+        "active_timer_elapsed_hours": active_timer_elapsed_hours,
         "is_timesheet_manager": is_manager,
         "running_timer_users": running_timer_users,
     }
