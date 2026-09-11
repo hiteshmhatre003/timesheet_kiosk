@@ -778,12 +778,22 @@ async function loadTimerScreen(name) {
   // running punch — it ticks against personal_hours, not the shared team
   // total, since we have no live visibility into a teammate's timer.
   if (runningRow) {
-    const startMs = new Date(runningRow.start_time.replace(" ", "T")).getTime();
-    const baseHours = doc.personal_hours;
+    // Anchor the tick to the browser's OWN clock only. doc.active_timer_elapsed_hours
+    // is a plain duration (not a timestamp) computed server-side via
+    // time_diff_in_hours(now_datetime(), start_time) — both sides already in the
+    // site's configured timezone, so it's correct regardless of what timezone the
+    // browser is in. We never re-parse runningRow.start_time as a Date here: that
+    // naive "YYYY-MM-DDTHH:MM:SS" string has no timezone marker, so new Date() on it
+    // is parsed as browser-local time, which silently drifts by however many hours
+    // the browser's zone differs from the site's — that was the source of "My Hours"
+    // showing several hours too many while a timer was running.
+    const elapsedAtLoadHours = parseFloat(doc.active_timer_elapsed_hours) || 0;
+    const loadedAtMs = Date.now();
+    const baseHours = parseFloat(doc.personal_hours) || 0;
     timerInterval = setInterval(() => {
-      const hrs = (Date.now() - startMs) / 3600000;
+      const hrsSinceLoad = (Date.now() - loadedAtMs) / 3600000;
       const el = document.getElementById("personalHours");
-      if (el) el.textContent = fmtHrsMins(parseFloat(baseHours) + hrs);
+      if (el) el.textContent = fmtHrsMins(baseHours + elapsedAtLoadHours + hrsSinceLoad);
     }, 1000);
   }
 }
