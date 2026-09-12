@@ -775,8 +775,12 @@ async function loadTimerScreen(name) {
   // live-tick the running timer's hours display. doc.timesheet_entry only
   // ever contains the viewing user's OWN entries (the backend filters
   // teammates' rows out), so runningRow here is always this user's own
-  // running punch — it ticks against personal_hours, not the shared team
-  // total, since we have no live visibility into a teammate's timer.
+  // running punch. We tick BOTH personal_hours and total_hours by the same
+  // amount — this user's own elapsed time — since that's exactly what
+  // lands in total_hours the moment they stop anyway. We still can't
+  // live-tick a teammate's own concurrently running entry, since we have
+  // no visibility into their clock; total_hours will just be missing
+  // their contribution until they stop, same as before.
   if (runningRow) {
     // Anchor the tick to the browser's OWN clock only. doc.active_timer_elapsed_hours
     // is a plain duration (not a timestamp) computed server-side via
@@ -786,14 +790,19 @@ async function loadTimerScreen(name) {
     // naive "YYYY-MM-DDTHH:MM:SS" string has no timezone marker, so new Date() on it
     // is parsed as browser-local time, which silently drifts by however many hours
     // the browser's zone differs from the site's — that was the source of "My Hours"
-    // showing several hours too many while a timer was running.
+    // (and now would be "Team Total" too) showing several hours too many while a
+    // timer was running.
     const elapsedAtLoadHours = parseFloat(doc.active_timer_elapsed_hours) || 0;
     const loadedAtMs = Date.now();
     const baseHours = parseFloat(doc.personal_hours) || 0;
+    const baseTotalHours = parseFloat(doc.total_hours) || 0;
     timerInterval = setInterval(() => {
       const hrsSinceLoad = (Date.now() - loadedAtMs) / 3600000;
-      const el = document.getElementById("personalHours");
-      if (el) el.textContent = fmtHrsMins(baseHours + elapsedAtLoadHours + hrsSinceLoad);
+      const liveElapsed = elapsedAtLoadHours + hrsSinceLoad;
+      const personalEl = document.getElementById("personalHours");
+      if (personalEl) personalEl.textContent = fmtHrsMins(baseHours + liveElapsed);
+      const totalEl = document.getElementById("totalHours");
+      if (totalEl) totalEl.textContent = fmtHrsMins(baseTotalHours + liveElapsed);
     }, 1000);
   }
 }
@@ -829,6 +838,10 @@ function wireEntries(name, sortedEntries, isDraft) {
     };
   });
 
+  document.querySelectorAll(".edit-time").forEach(span => {
+    span.onclick = () => startTimeEdit(span, name, sortedEntries, isDraft);
+  });
+
   const prevBtn = document.getElementById("entriesPrevBtn");
   if (prevBtn) prevBtn.onclick = () => {
     entriesPage = Math.max(1, entriesPage - 1);
@@ -853,13 +866,68 @@ function entryRow(editable) {
   return (e) => `
     <div class="entry-row">
       <div>${e.entry_date || ""}</div>
-      <div>${fmtTime(e.start_time)}</div>
-      <div>${e.is_running ? `<span class="running-badge">running</span>` : fmtTime(e.end_time)}</div>
+      <div>${timeCell(e, "start_time", editable)}</div>
+      <div>${e.is_running ? `<span class="running-badge">running</span>` : timeCell(e, "end_time", editable)}</div>
       <div>${flt2(e.duration_hours)}</div>
       <div>${e.minutes ? Math.round(e.minutes) : 0}</div>
       <div>${editable && !e.is_running ? `<button class="del del-entry" data-idx="${e.idx}">&#128465;</button>` : ""}</div>
     </div>
   `;
+}
+
+// A start/end time cell. Draft, non-running entries render the time as a
+// clickable span (data-idx/data-field identify which row+column so
+// wireEntries can look the entry back up in sortedEntries); clicking it
+// swaps the cell into a <input type="time"> with confirm/cancel, handled
+// by startTimeEdit(). Submitted or running entries just show plain text.
+function timeCell(e, field, editable) {
+  const display = fmtTime(e[field]);
+  if (!editable || e.is_running) return display;
+  return `<span class="edit-time" data-idx="${e.idx}" data-field="${field}" title="Click to edit">${display}</span>`;
+}
+
+// Turns a clicked start/end time cell into an inline editor: an
+// <input type="time"> prefilled with the current value, plus a confirm
+// (checkmark) and cancel (x) button. Confirming keeps the entry's existing
+// date and only swaps the time-of-day, then re-saves via update_entry and
+// reloads the screen so hours/minutes/total_hours all reflect the edit.
+// Cancelling just re-renders the entries list, discarding the in-progress edit.
+function startTimeEdit(span, name, sortedEntries, isDraft) {
+  const idx = span.dataset.idx;
+  const field = span.dataset.field;
+  const entry = sortedEntries.find(e => String(e.idx) === idx);
+  if (!entry) return;
+
+  const cell = span.parentElement;
+  const currentTime = fmtTime(entry[field]); // "HH:MM", safe default for <input type="time">
+
+  cell.innerHTML = `
+    <span class="time-edit-wrap">
+      <input type="time" class="time-input" value="${currentTime}">
+      <button class="time-confirm" title="Save">&#10003;</button>
+      <button class="time-cancel" title="Cancel">&#10005;</button>
+    </span>
+  `;
+
+  const input = cell.querySelector(".time-input");
+  input.focus();
+
+  cell.querySelector(".time-cancel").onclick = () => {
+    refreshEntriesDom(name, sortedEntries, isDraft);
+  };
+
+  cell.querySelector(".time-confirm").onclick = async () => {
+    const newTime = input.value;
+    if (!newTime) { toast("Pick a time first"); return; }
+    const entryDate = entry.entry_date || (entry.start_time || "").split(" ")[0];
+    const newDateTime = `${entryDate} ${newTime}:00`;
+    try {
+      await API.updateEntry(name, entry.idx, { [field]: newDateTime });
+      await loadTimerScreen(name);
+    } catch (e) {
+      toast(e.message);
+    }
+  };
 }
 
 function fmtTime(dt) {
