@@ -104,6 +104,12 @@ const API = {
     return callMethod("add_entry", { name, entry_date, start_time, end_time, notes });
   },
   deleteEntry(name, idx) { return callMethod("delete_entry", { name, idx }); },
+  // `fields` is a small object like { start_time: "2026-09-11 09:19:00" } or
+  // { end_time: "..." } — only ever one of start_time/end_time from the
+  // click-to-edit time cells, but update_entry accepts either/both.
+  updateEntry(name, idx, fields) {
+    return callMethod("update_entry", { name, idx, ...fields });
+  },
   submitTimesheet(name, final_hrs) { return callMethod("submit_timesheet", { name, final_hrs }); },
   getMyTimesheetReport(from_date, to_date, wih_number, status) {
     return callMethod("get_my_timesheet_report", { from_date, to_date, wih_number, status });
