@@ -808,6 +808,9 @@ def update_entry(name, idx, entry_date=None, start_time=None, end_time=None, dur
     user = _current_user()
     _check_access(doc, user)
 
+    if doc.docstatus != 0:
+        frappe.throw("Cannot edit entries on a submitted timesheet.")
+
     idx = int(idx)
     row = next((e for e in doc.timesheet_entry if e.idx == idx), None)
     if not row:
@@ -816,6 +819,10 @@ def update_entry(name, idx, entry_date=None, start_time=None, end_time=None, dur
     # recorded, so they're left editable rather than locked for everyone.
     if not _is_mine(row, user):
         frappe.throw("You can only edit your own time entries.", frappe.PermissionError)
+    # Editing start/end on a live running row would fight with stop_timer's
+    # own end_time/duration calculation — make them stop it first.
+    if row.get("is_running") and (start_time is not None or end_time is not None):
+        frappe.throw("Stop the timer before editing its start or end time.")
 
     if entry_date is not None:
         row.entry_date = entry_date
@@ -827,9 +834,19 @@ def update_entry(name, idx, entry_date=None, start_time=None, end_time=None, dur
     if duration_hours is not None:
         row.duration_hours = duration_hours
         row.minutes = round(float(duration_hours) * 60, 2)
-    elif start_time is not None and end_time is not None:
-        row.duration_hours = round(time_diff_in_hours(row.end_time, row.start_time), 4)
-        row.minutes = round(row.duration_hours * 60, 2)
+    elif start_time is not None or end_time is not None:
+        # Recompute whenever either side of the pair changes — not just
+        # when both are supplied in the same call — since the click-to-edit
+        # time cells on the frontend only ever send ONE of start_time/
+        # end_time at a time (whichever cell was clicked), letting the
+        # other side stand as already stored on the row.
+        if not row.start_time or not row.end_time:
+            frappe.throw("Both start and end time are required.")
+        duration = round(time_diff_in_hours(row.end_time, row.start_time), 4)
+        if flt(duration) <= 0:
+            frappe.throw("End time must be after start time.")
+        row.duration_hours = duration
+        row.minutes = round(duration * 60, 2)
 
     if notes is not None:
         row.notes = notes
