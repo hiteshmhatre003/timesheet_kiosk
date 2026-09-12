@@ -257,6 +257,14 @@ input[readonly] { background: var(--bg); color: var(--sub); }
 .entry-row:last-child { border-bottom: none; }
 .entry-row .del { color: var(--danger); cursor: pointer; background: none; border: none; font-size: 14px; }
 .entry-row .running-badge { color: var(--accent-green); font-weight: 700; }
+.entry-row .edit-time { cursor: pointer; border-bottom: 1px dashed var(--sub); }
+.entry-row .edit-time:hover { color: var(--accent-green-dark); border-bottom-color: var(--accent-green-dark); }
+.time-edit-wrap { display: inline-flex; align-items: center; gap: 4px; }
+.time-edit-wrap .time-input { font-size: 12px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 6px; width: 92px; }
+.time-edit-wrap .time-confirm,
+.time-edit-wrap .time-cancel { border: none; background: none; cursor: pointer; font-size: 13px; padding: 0 2px; line-height: 1; }
+.time-edit-wrap .time-confirm { color: var(--accent-green-dark); }
+.time-edit-wrap .time-cancel { color: var(--danger); }
 
 /* ---------- My Timesheet report (date-wise, per WIH) ---------- */
 .report-cols {
