@@ -180,7 +180,7 @@ async function loadStats() {
 function statCardsHtml(stats) {
   return `
     <div class="stat-card"><div class="label">TIME TODAY</div><div class="value">${fmtHrsMins(stats.total_hours_today)}</div></div>
-    <div class="stat-card"><div class="label">TIME THIS WEEK</div><div class="value">${fmtHrsMins(stats.total_hours_week)}</div></div>
+    <div class="stat-card"><div class="label">TIMESHEETS PENDING</div><div class="value">${stats.pending_timesheets ?? 0}</div></div>
     <div class="stat-card"><div class="label">ACTIVE SHEETS</div><div class="value">${stats.active_timesheets}</div></div>
     <div class="stat-card"><div class="label">${stats.has_active_timer ? "TIMER RUNNING" : "ALL TIMERS STOPPED"}</div><div class="value">${stats.has_active_timer ? "&#9654;" : "&#9632;"}</div></div>
   `;
@@ -599,7 +599,7 @@ async function loadTimerScreen(name) {
 
   const sortedEntries = [...doc.timesheet_entry].sort((a, b) => b.idx - a.idx);
   const runningRow = doc.timesheet_entry.find(e => e.is_running);
-  const isDraft = doc.status === "Draft" && doc.docstatus !== 1;
+  const isDraft = doc.docstatus === 0;
 
   // Submitting is now Timesheet Manager-only; everyone else keeps logging
   // time exactly as before (that's just doc.save(), unaffected by this).
@@ -666,7 +666,7 @@ async function loadTimerScreen(name) {
 
       <div class="entries-card">
         <div class="entries-head">Time Entries</div>
-        <div class="entries-cols"><div>DATE</div><div>START</div><div>END</div><div>HOURS</div><div>MIN</div><div></div></div>
+        <div class="entries-cols"><div>DATE</div><div>START</div><div>END</div><div>ACTIVITY</div><div>TIME</div><div></div></div>
         <div id="entryRows">
           ${renderEntryRows(sortedEntries, isDraft)}
         </div>
@@ -721,18 +721,18 @@ async function loadTimerScreen(name) {
 
   if (isDraft) {
     document.getElementById("timerBtn").onclick = async () => {
-      const btn = document.getElementById("timerBtn");
-      btn.disabled = true;
-      try {
-        if (runningRow) {
+      if (runningRow) {
+        const btn = document.getElementById("timerBtn");
+        btn.disabled = true;
+        try {
           await API.stopTimer(name);
-        } else {
-          await API.startTimer(name);
+          await loadTimerScreen(name);
+        } catch (e) {
+          toast(e.message);
+          btn.disabled = false;
         }
-        await loadTimerScreen(name);
-      } catch (e) {
-        toast(e.message);
-        btn.disabled = false;
+      } else {
+        showStartTimerModal(name);
       }
     };
 
@@ -868,8 +868,8 @@ function entryRow(editable) {
       <div>${e.entry_date || ""}</div>
       <div>${timeCell(e, "start_time", editable)}</div>
       <div>${e.is_running ? `<span class="running-badge">running</span>` : timeCell(e, "end_time", editable)}</div>
-      <div>${flt2(e.duration_hours)}</div>
-      <div>${e.minutes ? Math.round(e.minutes) : 0}</div>
+      <div>${e.activity || ""}</div>
+      <div>${fmtHrsMins(e.duration_hours)}</div>
       <div>${editable && !e.is_running ? `<button class="del del-entry" data-idx="${e.idx}">&#128465;</button>` : ""}</div>
     </div>
   `;
@@ -951,6 +951,66 @@ function showImageModal(url) {
   wrap.onclick = (e) => { if (e.target === wrap) wrap.remove(); };
   document.body.appendChild(wrap);
   document.getElementById("imgModalClose").onclick = () => wrap.remove();
+}
+
+// Shown when tapping "Start Timer" (never for Stop). Loads the current
+// activity options fresh from the backend (get_activity_options, itself
+// resolved from the Timesheet Entry.activity Select field's metadata, so
+// there's nothing to keep in sync here if the option list changes later)
+// and only calls start_timer once one is actually picked.
+function showStartTimerModal(name) {
+  const wrap = document.createElement("div");
+  wrap.className = "modal-backdrop";
+  wrap.innerHTML = `
+    <div class="modal">
+      <h3>Start Timer</h3>
+      <p>Select what you'll be working on.</p>
+      <div class="field">
+        <label>Activity</label>
+        <select id="activitySelect" disabled><option value="">Loading…</option></select>
+      </div>
+      <div id="startTimerErr"></div>
+      <div class="row">
+        <button class="btn btn-outline" id="cancelStartTimer">Cancel</button>
+        <button class="btn btn-primary" id="confirmStartTimer">&#9654; Start Timer</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+  document.getElementById("cancelStartTimer").onclick = () => wrap.remove();
+
+  const select = document.getElementById("activitySelect");
+  API.getActivityOptions()
+    .then(options => {
+      select.disabled = false;
+      select.innerHTML = options && options.length
+        ? `<option value="">Select activity…</option>` + options.map(o => `<option value="${o}">${o}</option>`).join("")
+        : `<option value="">No activities configured</option>`;
+    })
+    .catch(() => {
+      select.innerHTML = `<option value="">Could not load activities</option>`;
+    });
+
+  document.getElementById("confirmStartTimer").onclick = async () => {
+    const errBox = document.getElementById("startTimerErr");
+    errBox.innerHTML = "";
+    const activity = select.value;
+    if (!activity) {
+      errBox.innerHTML = `<div class="error-box">Please select an activity.</div>`;
+      return;
+    }
+    const btn = document.getElementById("confirmStartTimer");
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner"></span>`;
+    try {
+      await API.startTimer(name, activity);
+      wrap.remove();
+      await loadTimerScreen(name);
+    } catch (e) {
+      toast(e.message);
+      wrap.remove();
+    }
+  };
 }
 
 function showSubmitModal(name, defaultFinalHrs) {
