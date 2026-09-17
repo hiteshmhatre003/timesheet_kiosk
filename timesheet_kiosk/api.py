@@ -38,7 +38,7 @@ with a JSON body containing the function's arguments.
 
 import frappe
 from frappe.auth import LoginManager
-from frappe.utils import today, add_days, now_datetime, time_diff_in_hours, flt
+from frappe.utils import today, now_datetime, time_diff_in_hours, flt
 
 TS_DOCTYPE = "Employee Timesheet"
 ALLOCATION_DOCTYPE = "Timesheet Allocation"
@@ -203,6 +203,20 @@ def _recalc_total_hours(doc):
     doc.total_hours = round(sum(flt(e.duration_hours) for e in doc.timesheet_entry), 2)
 
 
+def _status_label(docstatus):
+    """Single source of truth for the human-readable status shown on the
+    app. Employee Timesheet also carries its own `status` Select field,
+    but that field is only ever written by THIS app's own create_timesheet
+    ("Draft") and submit_timesheet ("Submitted") — it has no way to know
+    when a document is submitted or cancelled directly from the ERPNext
+    desk UI, which only sets docstatus. Deriving the label from docstatus
+    (0/1/2 — Frappe's own field, always correct no matter which path a
+    submit/cancel came through) instead of trusting the stored field is
+    what makes the app's displayed status always match reality.
+    """
+    return {0: "Draft", 1: "Submitted", 2: "Cancelled"}.get(docstatus, "Draft")
+
+
 def _build_timesheet_response(doc, user=None):
     user = user or frappe.session.user
     entries = doc.get("timesheet_entry") or []
@@ -254,6 +268,7 @@ def _build_timesheet_response(doc, user=None):
             "end_time": str(e.end_time) if e.end_time else None,
             "duration_hours": e.duration_hours,
             "minutes": e.get("minutes"),
+            "activity": e.get("activity"),
             "notes": e.notes,
             "is_running": bool(e.get("is_running")),
         })
@@ -289,7 +304,7 @@ def _build_timesheet_response(doc, user=None):
         "product_name": doc.get("product_name"),
         "start_date": str(doc.start_date) if doc.get("start_date") else None,
         "end_date": str(doc.end_date) if doc.get("end_date") else None,
-        "status": doc.status or "Draft",
+        "status": _status_label(doc.docstatus),
         "docstatus": doc.docstatus,
         "total_hours": doc.get("total_hours"),   # whole-team combined total
         "personal_hours": personal_hours,          # this viewer's own total
@@ -539,7 +554,7 @@ def list_timesheets(status=None, wih_number=None, page=1):
         f"""
         select
             ts.name, ts.wih_number, ts.product_name, ts.start_date, ts.end_date,
-            ts.status, ts.docstatus, ts.total_hours, ts.notes
+            ts.docstatus, ts.total_hours, ts.notes
         from `tabEmployee Timesheet` ts
         where {scope_clause} {status_clause} {search_clause}
         order by ts.modified desc
@@ -552,6 +567,10 @@ def list_timesheets(status=None, wih_number=None, page=1):
     running_names = _running_timesheet_names([i["name"] for i in items], user)
     for item in items:
         item["is_running_for_me"] = item["name"] in running_names
+        # See _status_label's docstring — never trust the stored `status`
+        # field directly, since a submit/cancel done straight from the
+        # ERPNext desk UI only touches docstatus, not that custom field.
+        item["status"] = _status_label(item["docstatus"])
 
     return {"items": items, "total": total, "page": page, "page_size": PAGE_SIZE}
 
@@ -596,6 +615,13 @@ def create_timesheet(wih_number, product_name=None, start_date=None, end_date=No
 def get_timesheet(name):
     doc = frappe.get_doc(TS_DOCTYPE, name)
     _check_access(doc)
+    if doc.docstatus == 2:
+        # Cancelled documents are voided — list_timesheets/get_timesheet_stats
+        # already exclude them from every list and count, but a direct link
+        # or a stale bookmark could still land here, so block it explicitly
+        # rather than rendering a timer screen for a document that no
+        # longer exists in any meaningful sense.
+        frappe.throw("This timesheet has been cancelled.", frappe.DoesNotExistError)
     return _build_timesheet_response(doc)
 
 
@@ -682,7 +708,7 @@ def submit_timesheet(name, final_hrs=None):
 # --- Timer -------------------------------------------------------------
 
 @frappe.whitelist()
-def start_timer(name, notes=None):
+def start_timer(name, activity=None, notes=None):
     doc = frappe.get_doc(TS_DOCTYPE, name)
     # See update_timesheet's comment — _check_access is the real gate.
     doc.flags.ignore_permissions = True
@@ -697,6 +723,10 @@ def start_timer(name, notes=None):
     if any(e.get("is_running") and _is_mine(e, user) for e in doc.timesheet_entry):
         frappe.throw("A timer is already running. Stop it before starting a new one.")
 
+    activity = (activity or "").strip()
+    if not activity:
+        frappe.throw("Please select an activity before starting the timer.")
+
     now = now_datetime()
     doc.append("timesheet_entry", {
         "entry_date": now.date(),
@@ -704,6 +734,7 @@ def start_timer(name, notes=None):
         "end_time": None,
         "duration_hours": 0,
         "minutes": 0,
+        "activity": activity,
         "notes": notes,
         "is_running": 1,
         "user": user,
@@ -721,6 +752,22 @@ def start_timer(name, notes=None):
     doc.save()
     frappe.db.commit()
     return _build_timesheet_response(doc)
+
+
+@frappe.whitelist()
+def get_activity_options():
+    """Select-field options for Timesheet Entry.activity, resolved from
+    DocType metadata at runtime rather than hardcoded here — same
+    reasoning as _allocated_wih_numbers: this keeps working with no code
+    change if the option list is ever edited via Customize Form, and
+    degrades to an empty list rather than erroring if the field doesn't
+    exist yet on a given site.
+    """
+    meta = frappe.get_meta("Timesheet Entry")
+    field = meta.get_field("activity")
+    if not field or not field.options:
+        return []
+    return [o.strip() for o in field.options.split("\n") if o.strip()]
 
 
 @frappe.whitelist()
@@ -894,8 +941,8 @@ def get_timesheet_stats():
     the most recent 20).
 
     Scope for "my timesheets" matches list_timesheets: WIH I'm allocated
-    to, unioned with ones I created. HOURS TODAY/WEEK and the running-timer
-    flag are further scoped to entries *this user personally punched*
+    to, unioned with ones I created. HOURS TODAY and the running-timer flag
+    are further scoped to entries *this user personally punched*
     (te.user), since those numbers should read as personal effort, not the
     whole team's combined time — total_hours (the team figure) is shown on
     the timer screen itself instead.
@@ -910,10 +957,16 @@ def get_timesheet_stats():
     is missing, personal figures degrade to 0 rather than crashing the
     whole dashboard (accurate once you add the field — see
     DOCTYPE_REQUIREMENTS.md).
+
+    pending_timesheets counts WIH numbers this user is currently allocated
+    to (via Timesheet Allocation) for which no Draft or Submitted Employee
+    Timesheet exists yet — i.e. WIH that have been assigned but nobody has
+    started logging time against at all. A Cancelled timesheet doesn't
+    count as "created" for this purpose, so a WIH whose only timesheet was
+    cancelled is still counted as pending.
     """
     user = _current_user()
     today_str = today()
-    week_ago_str = add_days(today_str, -7)
 
     allocated = _allocated_wih_numbers(user)
     values = {"user": user}
@@ -936,9 +989,18 @@ def get_timesheet_stats():
         as_dict=True,
     )[0]
 
+    wih_with_timesheet = set()
+    if allocated:
+        wih_with_timesheet = set(frappe.get_all(
+            TS_DOCTYPE,
+            filters={"wih_number": ["in", allocated], "docstatus": ["in", [0, 1]]},
+            pluck="wih_number",
+            limit_page_length=0,
+        ))
+    pending_timesheets = len(set(allocated) - wih_with_timesheet)
+
     hours_values = dict(values)
     hours_values["today"] = today_str
-    hours_values["week_ago"] = week_ago_str
 
     # "and 1 = 0" rather than just dropping the clause: if the column is
     # missing, these figures should read as 0 (unknown), not silently
@@ -949,7 +1011,6 @@ def get_timesheet_stats():
         f"""
         select
             coalesce(sum(case when te.entry_date = %(today)s and te.is_running = 0 {user_scope} then te.duration_hours else 0 end), 0) as today_hours,
-            coalesce(sum(case when te.entry_date >= %(week_ago)s and te.is_running = 0 {user_scope} then te.duration_hours else 0 end), 0) as week_hours,
             sum(case when te.is_running = 1 {user_scope} then 1 else 0 end) as running_count
         from `tabTimesheet Entry` te
         inner join `tabEmployee Timesheet` ts on ts.name = te.parent
@@ -963,8 +1024,8 @@ def get_timesheet_stats():
         "total_timesheets": int(counts.total or 0),
         "active_timesheets": int(counts.active or 0),
         "submitted_timesheets": int(counts.submitted or 0),
+        "pending_timesheets": pending_timesheets,
         "total_hours_today": round(flt(hours.today_hours), 2),
-        "total_hours_week": round(flt(hours.week_hours), 2),
         "has_active_timer": bool(hours.running_count),
     }
 
@@ -1070,7 +1131,7 @@ def get_my_timesheet_report(from_date=None, to_date=None, wih_number=None, statu
             "entry_date": str(r.entry_date) if r.entry_date else None,
             "wih_number": r.wih_number,
             "product_name": r.product_name,
-            "status": r.status or "Draft",
+            "status": _status_label(r.docstatus),
             "docstatus": r.docstatus,
             "final_hrs": r.final_hrs,
             "hours": round(flt(r.day_hours), 2),
