@@ -98,8 +98,9 @@ const API = {
     return callMethod("create_timesheet", { wih_number, start_date, product_name });
   },
   getTimesheet(name) { return callMethod("get_timesheet", { name }); },
-  startTimer(name) { return callMethod("start_timer", { name }); },
+  startTimer(name, activity) { return callMethod("start_timer", { name, activity }); },
   stopTimer(name) { return callMethod("stop_timer", { name }); },
+  getActivityOptions() { return callMethod("get_activity_options"); },
   addEntry(name, entry_date, start_time, end_time, notes) {
     return callMethod("add_entry", { name, entry_date, start_time, end_time, notes });
   },
